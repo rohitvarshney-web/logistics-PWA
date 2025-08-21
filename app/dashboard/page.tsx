@@ -14,6 +14,13 @@ function useDebounced<T>(value: T, ms = 400) {
   return v;
 }
 
+function fmtDate(x: any) {
+  if (!x) return '';
+  const d = new Date(x);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleString();
+}
+
 export default function DashboardPage() {
   // Inputs
   const [passport, setPassport] = useState('');
@@ -38,11 +45,11 @@ export default function DashboardPage() {
 
   // Debounced values for auto-search
   const dPassport = useDebounced(passport, 500);
-  const dOrderId = useDebounced(orderId, 500);
-  const dLimit = useDebounced(limit, 300);
-  const dSkip = useDebounced(skip, 300);
+  const dOrderId  = useDebounced(orderId, 500);
+  const dLimit    = useDebounced(limit, 300);
+  const dSkip     = useDebounced(skip, 300);
   const dStatusCsv = useDebounced(statusCsv, 500);
-  const dTypeCsv = useDebounced(typeCsv, 500);
+  const dTypeCsv   = useDebounced(typeCsv, 500);
   const dCurrentTask = useDebounced(currentTask, 500);
 
   // Build optional fields only if provided
@@ -52,9 +59,9 @@ export default function DashboardPage() {
     body.sort = ['created_at#!#-1'];
 
     const status = dStatusCsv.split(',').map(s => s.trim()).filter(Boolean);
-    const types = dTypeCsv.split(',').map(s => s.trim()).filter(Boolean);
+    const types  = dTypeCsv.split(',').map(s => s.trim()).filter(Boolean);
     if (status.length) body.status = status;
-    if (types.length) body.type = types;
+    if (types.length)  body.type   = types;
     if (dCurrentTask !== '') body.currentTask = dCurrentTask || null;
 
     return body;
@@ -129,8 +136,15 @@ export default function DashboardPage() {
     window.location.href = '/login?logged_out=1';
   }
 
+  // Extract rows + count safely from the proxy response
+  const rows: any[] = result?.result?.data?.data || [];
+  const total: number = result?.result?.data?.count ?? (Array.isArray(rows) ? rows.length : 0);
+
+  const showingFrom = rows.length ? skip + 1 : 0;
+  const showingTo   = rows.length ? skip + rows.length : 0;
+
   return (
-    <main className="container" style={{ maxWidth: 980 }}>
+    <main className="container" style={{ maxWidth: 1100 }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
         <h1>SMV Logistics Console</h1>
         <div style={{ display:'flex', alignItems:'center', gap:12 }}>
@@ -174,7 +188,7 @@ export default function DashboardPage() {
             <label className="label">Order ID</label>
             <input
               className="input"
-              placeholder="e.g. SMV-ARE-00023"
+              placeholder="e.g. SMV-SGP-07907"
               value={orderId}
               onChange={(e) => setOrderId(e.target.value)}
             />
@@ -206,7 +220,7 @@ export default function DashboardPage() {
             <label className="label">Type (CSV)</label>
             <input
               className="input"
-              placeholder="e.g. PICKUP,DELIVERY"
+              placeholder="e.g. SUBMISSION,PICKUP"
               value={typeCsv}
               onChange={(e)=>setTypeCsv(e.target.value)}
             />
@@ -248,15 +262,21 @@ export default function DashboardPage() {
           <button
             className="btn"
             onClick={() => setSkip((s) => Math.max(0, s - limit))}
+            disabled={skip === 0}
           >
             ◀ Prev
           </button>
           <button
             className="btn"
             onClick={() => setSkip((s) => s + limit)}
+            disabled={rows.length < limit}
           >
             Next ▶
           </button>
+
+          <span className="label" style={{ marginLeft: 8 }}>
+            {total ? `Showing ${showingFrom}-${showingTo} of ${total}` : rows.length ? `Showing ${rows.length}` : 'No results yet'}
+          </span>
         </div>
       </section>
 
@@ -265,24 +285,51 @@ export default function DashboardPage() {
         <h3 className="label">Results</h3>
         {error && <p className="label" style={{ color:'#fca5a5', marginTop: 8 }}>{error}</p>}
 
+        {rows && rows.length > 0 && (
+          <div style={{ overflowX: 'auto', marginTop: 12 }}>
+            <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>SMV Order</th>
+                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Visa Order</th>
+                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Passport</th>
+                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Type</th>
+                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Status</th>
+                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Assigned For</th>
+                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Appointment</th>
+                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Travel End</th>
+                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Assignees</th>
+                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Experts</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r: any) => (
+                  <tr key={r._id} style={{ borderTop:'1px solid #2223', verticalAlign:'top' }}>
+                    <td style={{ padding:'8px' }}>{r.smv_order_id || ''}</td>
+                    <td style={{ padding:'8px' }}>{r.visa_order_id || ''}</td>
+                    <td style={{ padding:'8px', fontWeight:600 }}>{r.passport_number || ''}</td>
+                    <td style={{ padding:'8px' }}>{r.type || ''}</td>
+                    <td style={{ padding:'8px' }}>{r.status || ''}</td>
+                    <td style={{ padding:'8px' }}>{r.assigned_for || ''}</td>
+                    <td style={{ padding:'8px' }}>{fmtDate(r.appointment_date)}</td>
+                    <td style={{ padding:'8px' }}>{fmtDate(r.travel_end_date)}</td>
+                    <td style={{ padding:'8px' }}>{Array.isArray(r.assignees) ? r.assignees.length : 0}</td>
+                    <td style={{ padding:'8px' }}>{Array.isArray(r.visa_experts) ? r.visa_experts.length : 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Raw debug payload from the proxy */}
         {result && (
-          <>
-            {'ok' in result && (
-              <p className="label" style={{ marginTop: 8 }}>
-                {result.ok ? '✅ OK' : '❌ Error'}
-              </p>
-            )}
-
-            <details open style={{ marginTop: 12 }}>
-              <summary className="label">Debug / Raw JSON (proxy response)</summary>
-              <pre style={{ whiteSpace:'pre-wrap', fontSize:12, marginTop: 8 }}>
-                {JSON.stringify(result, null, 2)}
-              </pre>
-            </details>
-
-            {/* If your API returns a predictable list, you can render it here.
-                Keeping it generic since shapes vary. */}
-          </>
+          <details style={{ marginTop: 12 }}>
+            <summary className="label">Debug / Raw JSON (proxy response)</summary>
+            <pre style={{ whiteSpace:'pre-wrap', fontSize:12, marginTop: 8 }}>
+              {JSON.stringify(result, null, 2)}
+            </pre>
+          </details>
         )}
       </section>
     </main>
