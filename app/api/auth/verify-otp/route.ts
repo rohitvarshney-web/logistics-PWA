@@ -30,11 +30,12 @@ export async function POST(req: Request) {
         'Origin': origin,
         'Referer': origin + '/',
       },
-      body: JSON.stringify({ session_id: sessionId, otp }), // <-- snake_case to backend
+      body: JSON.stringify({ session_id: sessionId, otp }), // snake_case for upstream
       cache: 'no-store',
     });
 
     const text = await r.text();
+
     if (!r.ok) {
       let err: any = null; try { err = JSON.parse(text); } catch { err = { raw: text }; }
       return NextResponse.json(
@@ -44,8 +45,8 @@ export async function POST(req: Request) {
     }
 
     let data: any = null; try { data = JSON.parse(text); } catch { data = { raw: text }; }
-    const token = data?.access_token || data?.token || null;
 
+    const token = data?.access_token || data?.token || null;
     const res = NextResponse.json({
       ok: true,
       user: data?.user ?? null,
@@ -53,6 +54,7 @@ export async function POST(req: Request) {
       message: data?.message || data?.data?.status || 'OTP verified',
     });
 
+    // If backend gave a token, save it
     if (token) {
       res.cookies.set('smv_token', token, {
         httpOnly: true,
@@ -62,6 +64,15 @@ export async function POST(req: Request) {
         maxAge: 60 * 60 * 8,
       });
     }
+
+    // Always set a lightweight flag so middleware can allow navigation
+    res.cookies.set('smv_auth', 'ok', {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 60 * 60 * 8,
+    });
 
     return res;
   } catch (err: any) {
