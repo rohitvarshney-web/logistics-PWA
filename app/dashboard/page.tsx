@@ -14,11 +14,20 @@ function useDebounced<T>(value: T, ms = 400) {
   return v;
 }
 
-function fmtDate(x: any) {
+function fmtDateTime(x: any) {
   if (!x) return '';
   const d = new Date(x);
   if (isNaN(d.getTime())) return '';
   return d.toLocaleString();
+}
+
+// DATE ONLY for Travel End (no time)
+function fmtDateOnly(x: any) {
+  if (!x) return '';
+  const d = new Date(x);
+  if (isNaN(d.getTime())) return '';
+  // locale date only
+  return d.toLocaleDateString();
 }
 
 function AddressCell({ label, text, maxWidth = 280 }: { label: string; text?: string; maxWidth?: number }) {
@@ -32,7 +41,7 @@ function AddressCell({ label, text, maxWidth = 280 }: { label: string; text?: st
           style={{
             display: '-webkit-box',
             WebkitLineClamp: 2,
-            WebkitBoxOrient: 'vertical',
+            WebkitBoxOrient: 'vertical' as any,
             overflow: 'hidden',
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
@@ -93,6 +102,9 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<any>(null);
 
+  // Selection state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
   // Debounced values for auto-search
   const dPassport = useDebounced(passport, 500);
   const dOrderId  = useDebounced(orderId, 500);
@@ -144,6 +156,9 @@ export default function DashboardPage() {
         setError(js?.error || js?.upstreamBody?.message || 'Search failed');
       }
       setResult(js);
+
+      // Optional: when new page of results loads, you may want to clear selection for rows not visible.
+      // We'll keep previous selections intact across pages for now.
     } catch (e: any) {
       setError(`Network error: ${String(e)}`);
     } finally {
@@ -192,6 +207,35 @@ export default function DashboardPage() {
 
   const showingFrom = rows.length ? skip + 1 : 0;
   const showingTo   = rows.length ? skip + rows.length : 0;
+
+  // Selection helpers
+  const visibleIds = rows.map(r => String(r._id));
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedIds.has(id));
+  const someVisibleSelected = visibleIds.some(id => selectedIds.has(id)) && !allVisibleSelected;
+
+  function toggleRow(id: string, checked: boolean) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllVisible(checked: boolean) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (checked) {
+        visibleIds.forEach(id => next.add(id));
+      } else {
+        visibleIds.forEach(id => next.delete(id));
+      }
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
 
   return (
     <main className="container" style={{ maxWidth: 1100 }}>
@@ -324,15 +368,24 @@ export default function DashboardPage() {
             Next ▶
           </button>
 
-          <span className="label" style={{ marginLeft: 8 }}>
-            {total ? `Showing ${showingFrom}-${showingTo} of ${total}` : rows.length ? `Showing ${rows.length}` : 'No results yet'}
-          </span>
+            <span className="label" style={{ marginLeft: 8 }}>
+              {total ? `Showing ${showingFrom}-${showingTo} of ${total}` : rows.length ? `Showing ${rows.length}` : 'No results yet'}
+            </span>
         </div>
       </section>
 
       {/* Results */}
       <section className="card" style={{ marginTop: 24 }}>
-        <h3 className="label">Results</h3>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <h3 className="label">Results</h3>
+          <div className="label" style={{ display:'flex', alignItems:'center', gap:12 }}>
+            <span>{selectedIds.size} selected</span>
+            {selectedIds.size > 0 && (
+              <button className="btn" onClick={clearSelection}>Clear selection</button>
+            )}
+          </div>
+        </div>
+
         {error && <p className="label" style={{ color:'#fca5a5', marginTop: 8 }}>{error}</p>}
 
         {rows && rows.length > 0 && (
@@ -340,6 +393,16 @@ export default function DashboardPage() {
             <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
+                  {/* master select */}
+                  <th style={{ width: 36, padding:'8px' }}>
+                    <input
+                      type="checkbox"
+                      aria-label="Select all visible"
+                      checked={allVisibleSelected}
+                      ref={el => { if (el) el.indeterminate = someVisibleSelected; }}
+                      onChange={(e) => toggleSelectAllVisible(e.target.checked)}
+                    />
+                  </th>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>SMV Order</th>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Passport</th>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Type</th>
@@ -352,21 +415,36 @@ export default function DashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r: any) => (
-                  <tr key={r._id} style={{ borderTop:'1px solid #2223', verticalAlign:'top' }}>
-                    <td style={{ padding:'8px' }}>{r.smv_order_id || ''}</td>
-                    <td style={{ padding:'8px', fontWeight:600 }}>{r.passport_number || ''}</td>
-                    <td style={{ padding:'8px' }}>{r.type || ''}</td>
-                    <td style={{ padding:'8px' }}>{r.status || ''}</td>
-                    <td style={{ padding:'8px' }}>{r.assigned_for || ''}</td>
-                    <td style={{ padding:'8px' }}>{fmtDate(r.appointment_date)}</td>
-                    <td style={{ padding:'8px' }}>{fmtDate(r.travel_end_date)}</td>
+                {rows.map((r: any) => {
+                  const id = String(r._id);
+                  const isSelected = selectedIds.has(id);
+                  return (
+                    <tr key={id} style={{ borderTop:'1px solid #2223', verticalAlign:'top', background: isSelected ? 'rgba(59,130,246,0.08)' : 'transparent' }}>
+                      {/* row select */}
+                      <td style={{ padding:'8px' }}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select row ${id}`}
+                          checked={isSelected}
+                          onChange={(e) => toggleRow(id, e.target.checked)}
+                        />
+                      </td>
 
-                    {/* NEW: addresses with pretty handling */}
-                    <AddressCell label="Pickup Address" text={r.pickup_address} />
-                    <AddressCell label="Drop Address"   text={r.drop_address} />
-                  </tr>
-                ))}
+                      <td style={{ padding:'8px' }}>{r.smv_order_id || ''}</td>
+                      <td style={{ padding:'8px', fontWeight:600 }}>{r.passport_number || ''}</td>
+                      <td style={{ padding:'8px' }}>{r.type || ''}</td>
+                      <td style={{ padding:'8px' }}>{r.status || ''}</td>
+                      <td style={{ padding:'8px' }}>{r.assigned_for || ''}</td>
+                      <td style={{ padding:'8px' }}>{fmtDateTime(r.appointment_date)}</td>
+                      {/* travel end date ONLY (no time) */}
+                      <td style={{ padding:'8px' }}>{fmtDateOnly(r.travel_end_date)}</td>
+
+                      {/* addresses with pretty handling */}
+                      <AddressCell label="Pickup Address" text={r.pickup_address} />
+                      <AddressCell label="Drop Address"   text={r.drop_address} />
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
