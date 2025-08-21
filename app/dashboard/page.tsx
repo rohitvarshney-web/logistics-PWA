@@ -4,6 +4,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 type LoadingKind = 'passport' | 'order' | null;
 
+/* ---------- TS shims ---------- */
+// Some TS lib targets don’t declare this; keep it lightweight.
+declare global {
+  interface Window { BarcodeDetector?: any }
+}
+
 /* ---------- utils ---------- */
 function useDebounced<T>(value: T, ms = 400) {
   const [v, setV] = useState(value);
@@ -68,7 +74,7 @@ function AddressCell({ label, text, maxWidth = 280 }: { label: string; text?: st
   );
 }
 
-/* bulk statuses (client-only for now) */
+/* bulk statuses (client-only overlay for now) */
 const BULK_STATUS_OPTIONS = [
   { value: 'DOCUMENTS_RECEIVED', label: 'Documents Received' },
   { value: 'APPLICATIONS_SUBMITTED', label: 'Applications Submitted' },
@@ -76,10 +82,10 @@ const BULK_STATUS_OPTIONS = [
   { value: 'PASSPORT_COURIERED', label: 'Passport Couriered' },
 ];
 
-/* Quick/passive heuristics for passport numbers (A-Z0-9, 7-9 chars typical) */
+/* quick/passive passport heuristic */
 const PASSPORT_REGEX = /\b([A-Z0-9]{7,10})\b/i;
 
-/* ---------- main ---------- */
+/* ---------- component ---------- */
 export default function DashboardPage() {
   /* inputs */
   const [passport, setPassport] = useState('');
@@ -107,12 +113,12 @@ export default function DashboardPage() {
   /* logistics status overlay (client) + undo buffer */
   const [localStatus, setLocalStatus] = useState<Map<string, string>>(new Map());
   const lastChangeRef = useRef<{ prev: Map<string, string | undefined>, ids: Set<string> } | null>(null);
-  const [bulkStatus, setBulkStatus] = useState<string>('');
+  const [bulkStatus, setBulkStatus]   = useState<string>('');
 
   /* scan/upload UI */
-  const [scanOpen, setScanOpen]   = useState(false);
-  const [scanBusy, setScanBusy]   = useState(false);
-  const [scanFile, setScanFile]   = useState<File | null>(null);
+  const [scanOpen, setScanOpen]       = useState(false);
+  const [scanBusy, setScanBusy]       = useState(false);
+  const [scanFile, setScanFile]       = useState<File | null>(null);
   const [scanPreview, setScanPreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -144,10 +150,7 @@ export default function DashboardPage() {
         credentials: 'include',
         body: JSON.stringify(body),
       });
-      if (r.status === 401) {
-        await hardLogout(true);
-        return;
-      }
+      if (r.status === 401) { await hardLogout(true); return; }
       const txt = await r.text();
       let js: any; try { js = JSON.parse(txt); } catch { js = { raw: txt }; }
       if (!r.ok) setError(js?.error || js?.upstreamBody?.message || 'Search failed');
@@ -160,65 +163,37 @@ export default function DashboardPage() {
   }
 
   /* manual search */
-  function searchByPassport() {
-    const s = passport.trim(); if (!s) return;
-    return callSearch({ passport: s, ...optionalBody }, 'passport');
-  }
-  function searchByOrder() {
-    const s = orderId.trim(); if (!s) return;
-    return callSearch({ orderId: s, ...optionalBody }, 'order');
-  }
+  function searchByPassport() { const s = passport.trim(); if (!s) return; return callSearch({ passport: s, ...optionalBody }, 'passport'); }
+  function searchByOrder()    { const s = orderId.trim();  if (!s) return; return callSearch({ orderId: s,  ...optionalBody }, 'order'); }
 
   /* enter to search */
   function onPassportKey(e: React.KeyboardEvent<HTMLInputElement>) { if (e.key === 'Enter') searchByPassport(); }
   function onOrderKey(e: React.KeyboardEvent<HTMLInputElement>)    { if (e.key === 'Enter') searchByOrder(); }
 
   /* auto-search */
-  useEffect(() => {
-    if (!autoSearch) return;
-    const s = dPassport.trim();
-    if (s) callSearch({ passport: s, ...optionalBody }, 'passport');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoSearch, dPassport, optionalBody]);
-  useEffect(() => {
-    if (!autoSearch) return;
-    const s = dOrderId.trim();
-    if (s) callSearch({ orderId: s, ...optionalBody }, 'order');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoSearch, dOrderId, optionalBody]);
+  useEffect(() => { if (!autoSearch) return; const s = dPassport.trim(); if (s) callSearch({ passport: s, ...optionalBody }, 'passport'); /* eslint-disable-next-line */ }, [autoSearch, dPassport, optionalBody]);
+  useEffect(() => { if (!autoSearch) return; const s = dOrderId.trim();  if (s) callSearch({ orderId: s,  ...optionalBody }, 'order');    /* eslint-disable-next-line */ }, [autoSearch, dOrderId, optionalBody]);
 
-  /* robust logout: clears SW, caches, local storage, server cookie, then hard-redirects */
+  /* robust logout */
   async function hardLogout(fromAuthFail = false) {
     try {
-      // 1) clear local tokens
       try { localStorage.removeItem('smv_token'); } catch {}
       try { sessionStorage.clear(); } catch {}
-
-      // 2) unregister service workers
       if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
         const regs = await navigator.serviceWorker.getRegistrations();
         await Promise.all(regs.map(r => r.unregister().catch(() => {})));
       }
-
-      // 3) clear caches (PWA, runtime, next-pwa etc.)
       if (typeof caches !== 'undefined' && caches.keys) {
         const keys = await caches.keys();
         await Promise.all(keys.map(k => caches.delete(k).catch(() => {})));
       }
-
-      // 4) tell server to clear cookies/session
       await fetch('/api/auth/logout', { method: 'POST', credentials: 'include', cache: 'no-store' }).catch(() => {});
-
     } finally {
-      // 5) hard reload to login (bypass bfcache)
       const url = '/login?logged_out=1' + (fromAuthFail ? '&auth=fail' : '');
       window.location.replace(url);
     }
   }
-
-  async function logout() {
-    await hardLogout(false);
-  }
+  async function logout() { await hardLogout(false); }
 
   /* data extraction */
   const rows: any[] = result?.result?.data?.data || [];
@@ -306,67 +281,47 @@ export default function DashboardPage() {
   }
 
   /* -------- Scan / Upload Passport ---------- */
-
-  function openScan() {
-    setScanOpen(true);
-    setScanBusy(false);
-    setScanFile(null);
-    setScanPreview(null);
-  }
-  function closeScan() {
-    setScanOpen(false);
-    setScanBusy(false);
-    setScanFile(null);
-    setScanPreview(null);
-  }
+  function openScan() { setScanOpen(true); setScanBusy(false); setScanFile(null); setScanPreview(null); }
+  function closeScan() { setScanOpen(false); setScanBusy(false); setScanFile(null); setScanPreview(null); }
   function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0] || null;
     setScanFile(f);
     setScanPreview(f ? URL.createObjectURL(f) : null);
   }
 
-  // Try quick client-side extraction:
+  // Client-side extraction (no canvas.convertToBlob; images only)
   async function tryExtractClient(file: File): Promise<string | null> {
     // 1) filename heuristic
     const nameHit = file.name.match(PASSPORT_REGEX)?.[1] || null;
     if (nameHit) return nameHit.toUpperCase();
 
-    // 2) Barcode (if device supports) — might catch PDF417/QR on some docs
+    // images only for client detector; PDFs go to server OCR
+    if (!file.type || !file.type.startsWith('image/')) return null;
+
+    // 2) BarcodeDetector if supported
     try {
-      // @ts-ignore
-      if ('BarcodeDetector' in window) {
-        // @ts-ignore
-        const bd = new window.BarcodeDetector({ formats: ['qr_code', 'pdf417', 'code_39', 'code_128'] });
-        const bitmap = await createImageBitmap(file);
-        const canvas = document.createElement('canvas');
-        canvas.width = bitmap.width; canvas.height = bitmap.height;
-        const ctx = canvas.getContext('2d')!;
-        ctx.drawImage(bitmap, 0, 0);
-        const blobs = await canvas.convertToBlob ? [await canvas.convertToBlob()] : [file];
-        const imgBitmap = await createImageBitmap(blobs[0]);
-        // @ts-ignore
-        const codes = await bd.detect(imgBitmap);
+      const BD = window.BarcodeDetector;
+      if (BD) {
+        const bd = new BD({ formats: ['qr_code', 'pdf417', 'code_39', 'code_128'] });
+        const bitmap = await createImageBitmap(file);           // pass ImageBitmap directly
+        const codes = await bd.detect(bitmap);
         for (const c of codes || []) {
-          const m = (c.rawValue || '').match(PASSPORT_REGEX);
+          const raw = String(c?.rawValue ?? '');
+          const m = raw.match(PASSPORT_REGEX);
           if (m) return m[1].toUpperCase();
         }
       }
-    } catch {}
+    } catch {/* swallow and fallback to server */}
 
-    // 3) give up client-side
     return null;
   }
 
-  // Server OCR fallback (implement in /api/smv/scan-passport)
+  // Server OCR fallback stub (wire your OCR later)
   async function tryExtractServer(file: File): Promise<string | null> {
     try {
       const fd = new FormData();
       fd.append('file', file);
-      const r = await fetch('/api/smv/scan-passport', {
-        method: 'POST',
-        body: fd,
-        credentials: 'include',
-      });
+      const r = await fetch('/api/smv/scan-passport', { method: 'POST', body: fd, credentials: 'include' });
       if (!r.ok) return null;
       const js = await r.json().catch(() => ({}));
       const val: string | undefined = js?.passport || js?.data?.passport;
@@ -383,10 +338,7 @@ export default function DashboardPage() {
     try {
       let code = await tryExtractClient(scanFile);
       if (!code) code = await tryExtractServer(scanFile);
-      if (!code) {
-        setError('Could not read passport from the image. Please try another photo or type it manually.');
-        return;
-      }
+      if (!code) { setError('Could not read passport from the image. Please try another photo or type it manually.'); return; }
       setPassport(code);
       setScanOpen(false);
       await callSearch({ passport: code, ...optionalBody }, 'passport');
@@ -599,8 +551,8 @@ export default function DashboardPage() {
                       <td style={{ padding:'8px' }}>{r.smv_order_id || ''}</td>
                       <td style={{ padding:'8px', fontWeight:600 }}>{r.passport_number || ''}</td>
                       <td style={{ padding:'8px' }}>{r.type || ''}</td>
-                      <td style={{ padding:'8px' }}>{r.status ?? '—'}</td>
-                      <td style={{ padding:'8px' }}>{displayLogisticsStatus(r)}</td>
+                      <td style={{ padding:'8px' }}>{r.status ?? '—'}</td> {/* API status */}
+                      <td style={{ padding:'8px' }}>{displayLogisticsStatus(r)}</td> {/* logistics overlay */}
                       <td style={{ padding:'8px' }}>{r.assigned_for || ''}</td>
                       <td style={{ padding:'8px' }}>{fmtDateTime(r.appointment_date)}</td>
                       <td style={{ padding:'8px' }}>{fmtDateOnly(r.travel_end_date)}</td>
