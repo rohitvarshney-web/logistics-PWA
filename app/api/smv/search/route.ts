@@ -22,34 +22,14 @@ function buildPayload(inBody: any) {
   if (!Array.isArray(sort) || !sort.length) sort = ["created_at#!#-1"];
 
   const payload: Record<string, any> = { searchText, limit, skip, sort };
+
+  // ONLY include these if caller provided them
   if (Array.isArray(inBody.type) && inBody.type.length) payload.type = inBody.type;
   if (Array.isArray(inBody.status) && inBody.status.length) payload.status = inBody.status;
   if (Array.isArray(inBody.filters) && inBody.filters.length) payload.filters = inBody.filters;
   if (inBody.currentTask !== undefined) payload.currentTask = inBody.currentTask;
 
   return { payload };
-}
-
-function makeHeaders({
-  scheme, token, origin, passThroughAuth,
-}: { scheme: "raw" | "Bearer" | "JWT" | "Token"; token: string; origin: string; passThroughAuth?: string | null }) {
-  const h: Record<string, string> = {
-    "Content-Type": "application/json",
-    "Accept": "application/json, text/plain, */*",
-  };
-  if (passThroughAuth) {
-    // If client supplied Authorization, pass it unchanged.
-    h["Authorization"] = passThroughAuth;
-  } else if (token) {
-    h["Authorization"] = scheme === "raw" ? token : `${scheme} ${token}`;
-  }
-  if (origin) {
-    h["Origin"] = origin;
-    h["Referer"] = origin.replace(/\/$/, "") + "/";
-  }
-  const consumer = process.env.SMV_CONSUMER;
-  if (consumer) h["X-Consumer"] = consumer;
-  return h;
 }
 
 async function callUpstream(url: string, headers: Record<string,string>, body: any) {
@@ -66,34 +46,41 @@ async function callUpstream(url: string, headers: Record<string,string>, body: a
 
 export async function POST(req: NextRequest) {
   const inBody = await req.json().catch(() => ({} as any));
-  const { payload, error } = buildPayload(inBody) as any;
-  if (error) return NextResponse.json({ error }, { status: 400 });
+  const built = buildPayload(inBody) as any;
+  if (built.error) return NextResponse.json({ error: built.error }, { status: 400 });
+  const payload = built.payload;
 
-  const cookieToken  = cookies().get("smv_token")?.value || "";
-  const passThroughAuth = req.headers.get("authorization"); // if client set it, we keep it
-  const haveAnyToken = !!passThroughAuth || !!cookieToken;
-  if (!haveAnyToken) {
+  // 🔐 Always source token from cookie (avoid pass-through mismatch)
+  const token = cookies().get("smv_token")?.value || "";
+  if (!token) {
     return NextResponse.json(
       { error: "Not authenticated. Missing Authorization bearer token." },
       { status: 401 }
     );
   }
 
-  const base   = process.env.SMV_API_BASE || "https://api.live.stampmyvisa.com";
-  const url    = `${base}/v1/logistics/search`;
-  const origin = req.headers.get("origin") || process.env.SMV_ORIGIN || "";
+  const base = process.env.SMV_API_BASE || "https://api.live.stampmyvisa.com";
+  const url  = `${base}/v1/logistics/search`;
 
-  // Preferred scheme: default to RAW (matches your 200 OK trace). Override with SMV_LOGISTICS_AUTH_SCHEME.
-  const preferred = (process.env.SMV_LOGISTICS_AUTH_SCHEME || "raw").trim() as "raw" | "Bearer" | "JWT" | "Token";
-  const alt       = preferred === "raw" ? "Bearer" : "raw";
+  // First attempt: RAW Authorization (matches your 200 OK trace)
+  let headers: Record<string,string> = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/plain, */*",
+    "Authorization": token,
+  };
+  // Intentionally do NOT set Origin/Referer
+  if (process.env.SMV_CONSUMER) headers["X-Consumer"] = process.env.SMV_CONSUMER!;
 
-  // 1st attempt
-  let headers = makeHeaders({ scheme: preferred, token: cookieToken, origin, passThroughAuth });
   let { r, data } = await callUpstream(url, headers, payload);
 
-  // If auth failed and we built the header (i.e., client didn’t pass one), try alternate scheme once
-  if (r.status === 401 && !passThroughAuth && cookieToken) {
-    headers = makeHeaders({ scheme: alt, token: cookieToken, origin });
+  // If 401, retry with Bearer scheme once
+  if (r.status === 401) {
+    headers = {
+      "Content-Type": "application/json",
+      "Accept": "application/json, text/plain, */*",
+      "Authorization": `Bearer ${token}`,
+    };
+    if (process.env.SMV_CONSUMER) headers["X-Consumer"] = process.env.SMV_CONSUMER!;
     ({ r, data } = await callUpstream(url, headers, payload));
   }
 
@@ -106,9 +93,8 @@ export async function POST(req: NextRequest) {
         sent: payload,
         upstreamStatus: r.status,
         upstreamBody: data,
-        authSchemeTried: passThroughAuth ? "pass-through" : preferred,
-        retriedWith: (r.status === 401 && !passThroughAuth && cookieToken) ? alt : null,
-        tokenSample: mask(cookieToken),
+        tokenSample: mask(token),
+        schemeTried: r.status === 401 ? "Bearer (after RAW failed)" : "RAW",
       },
       { status: r.status }
     );
