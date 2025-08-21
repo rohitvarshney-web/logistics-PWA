@@ -1,10 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
 
 export const dynamic = "force-dynamic";
 
+function getAuthFromReq(req: NextRequest): string | null {
+  // 1) Explicit Authorization header wins
+  const h = req.headers.get("authorization");
+  if (h && h.trim()) return h;
+
+  // 2) Same-origin cookie set by verify-otp
+  const c = req.cookies.get("smv_token")?.value;
+  if (c) return `Bearer ${c}`;
+
+  // 3) Fallback: parse raw Cookie header (paranoid)
+  const raw = req.headers.get("cookie") || "";
+  const match = raw.split(";").map(s => s.trim()).find(s => s.startsWith("smv_token="));
+  if (match) {
+    const val = decodeURIComponent(match.split("=").slice(1).join("="));
+    if (val) return `Bearer ${val}`;
+  }
+  return null;
+}
+
 export async function POST(req: NextRequest) {
-  // derive searchText (passport/orderId convenience)
+  // ---- derive payload ----
   const inBody = await req.json().catch(() => ({} as any));
   const raw =
     inBody.searchText ??
@@ -15,13 +33,9 @@ export async function POST(req: NextRequest) {
 
   const searchText = raw == null ? "" : String(raw).trim();
   if (!searchText) {
-    return NextResponse.json(
-      { error: "Provide searchText or passport/orderId" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "Provide searchText or passport/orderId" }, { status: 400 });
   }
 
-  // coerce + defaults
   const limit = Number.isFinite(Number(inBody.limit)) ? Number(inBody.limit) : 10;
   const skip  = Number.isFinite(Number(inBody.skip))  ? Number(inBody.skip)  : 0;
 
@@ -34,13 +48,9 @@ export async function POST(req: NextRequest) {
   const filters     = Array.isArray(inBody.filters) ? inBody.filters : ["unassigned"];
   const currentTask = inBody.currentTask === undefined ? null : inBody.currentTask;
 
-  // 🔐 Authorization: prefer incoming header, else cookie smv_token
-  const cookieToken = cookies().get("smv_token")?.value;
-  const incomingAuth = req.headers.get("authorization");
-  const authHeader = incomingAuth || (cookieToken ? `Bearer ${cookieToken}` : "");
-
+  // ---- auth header from request/cookie ----
+  const authHeader = getAuthFromReq(req);
   if (!authHeader) {
-    // fail fast so the UI tells user to log in again
     return NextResponse.json(
       { error: "Not authenticated. Missing Authorization bearer token." },
       { status: 401 }
@@ -53,8 +63,8 @@ export async function POST(req: NextRequest) {
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    Accept: "application/json, text/plain, */*",
-    Authorization: authHeader,                 // 👈 send token upstream
+    "Accept": "application/json, text/plain, */*",
+    "Authorization": authHeader,
   };
   if (origin) {
     headers["Origin"]  = origin;
@@ -71,23 +81,14 @@ export async function POST(req: NextRequest) {
   });
 
   const txt = await upstream.text();
-  try {
-    const data = JSON.parse(txt);
-    if (!upstream.ok) {
-      return NextResponse.json(
-        { error: "logistics search failed", upstreamStatus: upstream.status, upstreamBody: data, sent: payload, url },
-        { status: upstream.status }
-      );
-    }
-    return NextResponse.json({ ok: true, result: data, sent: payload, url });
-  } catch {
-    // non-JSON upstream
-    if (!upstream.ok) {
-      return NextResponse.json(
-        { error: "logistics search failed", upstreamStatus: upstream.status, upstreamBody: { raw: txt }, sent: payload, url },
-        { status: upstream.status }
-      );
-    }
-    return NextResponse.json({ ok: true, result: { raw: txt }, sent: payload, url });
+  let data: any; try { data = JSON.parse(txt); } catch { data = { raw: txt }; }
+
+  if (!upstream.ok) {
+    return NextResponse.json(
+      { error: "logistics search failed", upstreamStatus: upstream.status, upstreamBody: data, sent: payload, url },
+      { status: upstream.status }
+    );
   }
+
+  return NextResponse.json({ ok: true, result: data, sent: payload, url });
 }
