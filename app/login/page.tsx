@@ -1,12 +1,15 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 function guessMethod(identifier: string): 'EMAIL' | 'PHONE' {
   return identifier.includes('@') ? 'EMAIL' : 'PHONE';
 }
 
 export default function LoginPage() {
+  const router = useRouter();
+
   const [identifier, setIdentifier] = useState('');
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState('');
@@ -21,12 +24,11 @@ export default function LoginPage() {
     const method = guessMethod(identifier);
 
     // optional: check-user
-    const check = await fetch(
-      `/api/auth/check-user?method=${method}&identifier=${encodeURIComponent(identifier)}`
-    );
+    const check = await fetch(`/api/auth/check-user?method=${method}&identifier=${encodeURIComponent(identifier)}`);
     if (!check.ok) {
       const js = await check.json().catch(() => ({}));
-      setError(js.error || 'User not found or not allowed'); return;
+      setError(js.error || 'User not found or not allowed');
+      return;
     }
 
     const r = await fetch('/api/auth/send-otp', {
@@ -36,14 +38,10 @@ export default function LoginPage() {
     });
     const js = await r.json().catch(() => ({}));
 
-    if (!r.ok) {
-      setError(js.error || 'Failed to send OTP'); return;
-    }
+    if (!r.ok) { setError(js.error || 'Failed to send OTP'); return; }
 
     const sid = js.sessionId || js.session_id || js?.upstream?.data?.session_id || null;
-    if (!sid) {
-      setError('OTP sent but session_id missing from server.'); return;
-    }
+    if (!sid) { setError('OTP sent but session_id missing from server.'); return; }
 
     setSessionId(sid);
     setOtpSent(true);
@@ -61,6 +59,7 @@ export default function LoginPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId, otp: String(otp).trim() }),
     });
+
     const js = await r.json().catch(() => ({}));
 
     if (!r.ok) {
@@ -74,8 +73,9 @@ export default function LoginPage() {
       return;
     }
 
-    setInfo(js.message || 'Logged in successfully.');
-    // window.location.href = '/';
+    setInfo(js.message || 'OTP verified');
+    // 🔁 move ahead
+    router.replace('/dashboard');
   }
 
   return (
