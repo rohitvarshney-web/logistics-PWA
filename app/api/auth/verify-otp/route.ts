@@ -1,157 +1,75 @@
 // app/api/auth/verify-otp/route.ts
 import { NextResponse } from 'next/server';
 
-type Variant = {
-  headers: Record<string, string>;
-  body: string;
-  label: string;
-  bodyPreview: any;
-  contentType: 'json' | 'form';
-};
-
-const sanitizeHeaders = (h: Record<string, string>) => {
-  const out = { ...h };
-  // nothing sensitive here, but keep the helper if you add auth later
-  return out;
-};
-
-const isEmail = (s: string) => s.includes('@');
-
-function buildBase(identifier: string) {
-  const consumer = process.env.SMV_CONSUMER || 'nucleus';
-  const method = isEmail(identifier) ? 'EMAIL' : 'PHONE';
-  const email = isEmail(identifier) ? identifier : '';
-  const phone = isEmail(identifier) ? '' : identifier;
-  return { consumer, method, email, phone };
-}
-
-function makeJson(obj: any, label: string, origin: string): Variant {
-  return {
-    label,
-    contentType: 'json',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json, text/plain, */*',
-      'Origin': origin,
-      'Referer': origin + '/',
-    },
-    body: JSON.stringify(obj),
-    bodyPreview: obj,
-  };
-}
-
-function makeForm(obj: Record<string, string>, label: string, origin: string): Variant {
-  return {
-    label,
-    contentType: 'form',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Accept': 'application/json, text/plain, */*',
-      'Origin': origin,
-      'Referer': origin + '/',
-    },
-    body: new URLSearchParams(obj).toString(),
-    bodyPreview: obj,
-  };
-}
-
-function buildVariants(identifier: string, code: string, origin: string): Variant[] {
-  const base = buildBase(identifier);
-
-  const keys = ['otp', 'code', 'otp_code', 'token', 'otpCode'] as const;
-  const variants: Variant[] = [];
-
-  for (const retry of [true, false]) {
-    for (const k of keys) {
-      const obj = { ...base, retry, [k]: code };
-      variants.push(makeJson(obj, `json:${k}:retry=${retry}`, origin));
-    }
-    for (const k of keys) {
-      const obj = Object.fromEntries(
-        Object.entries({ ...base, retry, [k]: code }).map(([kk, vv]) => [kk, String(vv ?? '')])
-      ) as Record<string, string>;
-      variants.push(makeForm(obj, `form:${k}:retry=${retry}`, origin));
-    }
-  }
-
-  return variants;
-}
-
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request) {
-  const bodyIn = await req.json().catch(() => ({} as any));
-  const identifier = String(bodyIn.identifier || '').trim();
-  const code = String(
-    bodyIn.otp ??
-    bodyIn.code ??
-    bodyIn.otp_code ??
-    bodyIn.token ??
-    bodyIn.otpCode ??
-    ''
-  ).trim();
+  try {
+    const body = await req.json().catch(() => ({}));
+    const sessionId = String(body.sessionId || '').trim();
+    const otp = String(body.otp || '').trim();
 
-  if (!identifier || !code) {
-    return NextResponse.json(
-      { error: 'identifier and otp/code required' },
-      { status: 400 }
-    );
-  }
+    if (!sessionId || !otp) {
+      return NextResponse.json(
+        { error: 'sessionId and otp are required' },
+        { status: 400 }
+      );
+    }
 
-  const origin =
-    req.headers.get('origin') ||
-    process.env.SMV_ORIGIN ||
-    'https://example.com';
+    const base = process.env.SMV_API_BASE || 'https://api.live.stampmyvisa.com';
+    const path = process.env.SMV_VERIFY_OTP_PATH || '/v1/auth/verify-login-otp';
+    const url = `${base}${path}`;
 
-  const base = process.env.SMV_API_BASE || 'https://api.live.stampmyvisa.com';
-  const path = process.env.SMV_VERIFY_OTP_PATH || '/v1/auth/verify-login-otp';
-  const url = `${base}${path}`;
+    const origin = req.headers.get('origin') || process.env.SMV_ORIGIN || 'https://internal.stampmyvisa.com';
 
-  let last = { status: 0, body: '', label: '', variant: null as null | Variant };
-
-  for (const v of buildVariants(identifier, code, origin)) {
-    const resp = await fetch(url, {
+    const r = await fetch(url, {
       method: 'POST',
-      headers: v.headers,
-      body: v.body,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/plain, */*',
+        'Origin': origin,
+        'Referer': origin + '/',
+      },
+      body: JSON.stringify({ sessionId, otp }),
       cache: 'no-store',
     });
 
-    const text = await resp.text();
-    last = { status: resp.status, body: text, label: v.label, variant: v };
+    const text = await r.text();
 
-    if (resp.ok) {
-      let data: any = null;
-      try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    if (!r.ok) {
+      let err: any = null; try { err = JSON.parse(text); } catch { err = { raw: text }; }
+      return NextResponse.json(
+        { error: 'verify-otp failed', upstreamStatus: r.status, upstreamBody: err },
+        { status: r.status }
+      );
+    }
 
-      return NextResponse.json({
-        ok: true,
-        user: data?.user ?? null,
-        token: data?.access_token || data?.token || null,
-        usedVariant: v.label,
+    let data: any = null; try { data = JSON.parse(text); } catch { data = { raw: text }; }
+
+    const token = data?.access_token || data?.token || null;
+
+    const res = NextResponse.json({
+      ok: true,
+      user: data?.user ?? null,
+      token,
+      message: data?.message || 'OTP verified',
+    });
+
+    if (token) {
+      res.cookies.set('smv_token', token, {
+        httpOnly: true,
+        secure: true,
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 60 * 60 * 8, // 8 hours
       });
     }
+
+    return res;
+  } catch (err: any) {
+    return NextResponse.json(
+      { error: 'Unexpected error in verify-otp', detail: String(err) },
+      { status: 500 }
+    );
   }
-
-  // Prepare readable upstream body
-  let upstreamParsed: any = null;
-  try { upstreamParsed = JSON.parse(last.body); } catch { upstreamParsed = last.body; }
-
-  // Return FULL DEBUG so you can see it on the page
-  return NextResponse.json(
-    {
-      error: 'verify-otp failed',
-      upstreamStatus: last.status,
-      upstreamBody: upstreamParsed,
-      triedVariant: last.label,
-      debug: {
-        url,
-        method: 'POST',
-        headersSent: last.variant ? sanitizeHeaders(last.variant.headers) : null,
-        contentType: last.variant?.contentType ?? null,
-        payloadPreview: last.variant?.bodyPreview ?? null,
-      },
-    },
-    { status: 502 }
-  );
 }
