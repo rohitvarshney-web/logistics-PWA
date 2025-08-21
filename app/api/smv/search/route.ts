@@ -3,28 +3,7 @@ import { cookies } from "next/headers";
 
 export const dynamic = "force-dynamic";
 
-/**
- * Accepts body:
- * {
- *   // required (any one of these becomes searchText)
- *   searchText?: string; passport?: string; orderId?: string; order_id?: string; passportNumber?: string;
- *
- *   // optional (forwarded as-is if provided)
- *   limit?: number; skip?: number; sort?: string[] | string;
- *   type?: string[]; status?: string[]; filters?: string[]; currentTask?: string | null;
- * }
- *
- * We:
- *  - derive searchText
- *  - coerce limit/skip (defaults: 10/0)
- *  - ensure sort is an array (default: ["created_at#!#-1"])
- *  - include type/status/filters/currentTask ONLY if provided (no empty defaults)
- *  - forward Authorization (Bearer/JWT/etc), plus x-access-token variants
- */
-export async function POST(req: NextRequest) {
-  const inBody = await req.json().catch(() => ({} as any));
-
-  // --- derive searchText ---
+function buildPayload(inBody: any) {
   const raw =
     inBody.searchText ??
     inBody.passport ??
@@ -33,14 +12,8 @@ export async function POST(req: NextRequest) {
     inBody.order_id;
 
   const searchText = raw == null ? "" : String(raw).trim();
-  if (!searchText) {
-    return NextResponse.json(
-      { error: "Provide searchText or passport/orderId" },
-      { status: 400 }
-    );
-  }
+  if (!searchText) return { error: "Provide searchText or passport/orderId" };
 
-  // --- coerce base paging + sort ---
   const limit = Number.isFinite(Number(inBody.limit)) ? Number(inBody.limit) : 10;
   const skip  = Number.isFinite(Number(inBody.skip))  ? Number(inBody.skip)  : 0;
 
@@ -48,30 +21,58 @@ export async function POST(req: NextRequest) {
   if (typeof sort === "string") sort = [sort];
   if (!Array.isArray(sort) || !sort.length) sort = ["created_at#!#-1"];
 
-  // --- build payload with optional keys only if provided ---
   const payload: Record<string, any> = { searchText, limit, skip, sort };
+  if (Array.isArray(inBody.type) && inBody.type.length) payload.type = inBody.type;
+  if (Array.isArray(inBody.status) && inBody.status.length) payload.status = inBody.status;
+  if (Array.isArray(inBody.filters) && inBody.filters.length) payload.filters = inBody.filters;
+  if (inBody.currentTask !== undefined) payload.currentTask = inBody.currentTask;
 
-  if (Array.isArray(inBody.type) && inBody.type.length) {
-    payload.type = inBody.type;
-  }
-  if (Array.isArray(inBody.status) && inBody.status.length) {
-    payload.status = inBody.status;
-  }
-  if (Array.isArray(inBody.filters) && inBody.filters.length) {
-    payload.filters = inBody.filters;
-  }
-  if (inBody.currentTask !== undefined) {
-    payload.currentTask = inBody.currentTask; // allow null or string if you pass it
-  }
+  return { payload };
+}
 
-  // --- auth header(s) ---
-  const cookieToken  = cookies().get("smv_token")?.value || null;
-  const incomingAuth = req.headers.get("authorization"); // e.g. "Bearer abc"
-  const scheme = (process.env.SMV_LOGISTICS_AUTH_SCHEME || "Bearer").trim(); // optional override
-  const builtAuth = cookieToken ? `${scheme} ${cookieToken}` : "";
-  const authHeader = incomingAuth || builtAuth;
+function makeHeaders({
+  scheme, token, origin, passThroughAuth,
+}: { scheme: "raw" | "Bearer" | "JWT" | "Token"; token: string; origin: string; passThroughAuth?: string | null }) {
+  const h: Record<string, string> = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/plain, */*",
+  };
+  if (passThroughAuth) {
+    // If client supplied Authorization, pass it unchanged.
+    h["Authorization"] = passThroughAuth;
+  } else if (token) {
+    h["Authorization"] = scheme === "raw" ? token : `${scheme} ${token}`;
+  }
+  if (origin) {
+    h["Origin"] = origin;
+    h["Referer"] = origin.replace(/\/$/, "") + "/";
+  }
+  const consumer = process.env.SMV_CONSUMER;
+  if (consumer) h["X-Consumer"] = consumer;
+  return h;
+}
 
-  if (!authHeader && !cookieToken) {
+async function callUpstream(url: string, headers: Record<string,string>, body: any) {
+  const r = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+  const txt = await r.text();
+  let data: any; try { data = JSON.parse(txt); } catch { data = { raw: txt }; }
+  return { r, data };
+}
+
+export async function POST(req: NextRequest) {
+  const inBody = await req.json().catch(() => ({} as any));
+  const { payload, error } = buildPayload(inBody) as any;
+  if (error) return NextResponse.json({ error }, { status: 400 });
+
+  const cookieToken  = cookies().get("smv_token")?.value || "";
+  const passThroughAuth = req.headers.get("authorization"); // if client set it, we keep it
+  const haveAnyToken = !!passThroughAuth || !!cookieToken;
+  if (!haveAnyToken) {
     return NextResponse.json(
       { error: "Not authenticated. Missing Authorization bearer token." },
       { status: 401 }
@@ -82,57 +83,34 @@ export async function POST(req: NextRequest) {
   const url    = `${base}/v1/logistics/search`;
   const origin = req.headers.get("origin") || process.env.SMV_ORIGIN || "";
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "Accept": "application/json, text/plain, */*",
-  };
-  if (authHeader) headers["Authorization"] = authHeader;
-  if (cookieToken) {
-    headers["x-access-token"] = cookieToken;
-    headers["x-auth-token"]   = cookieToken;
-    headers["Cookie"]         = `access_token=${cookieToken}`;
-  }
-  if (origin) {
-    headers["Origin"]  = origin;
-    headers["Referer"] = origin.replace(/\/$/, "") + "/";
-  }
-  if (process.env.SMV_CONSUMER) {
-    headers["X-Consumer"] = process.env.SMV_CONSUMER;
+  // Preferred scheme: default to RAW (matches your 200 OK trace). Override with SMV_LOGISTICS_AUTH_SCHEME.
+  const preferred = (process.env.SMV_LOGISTICS_AUTH_SCHEME || "raw").trim() as "raw" | "Bearer" | "JWT" | "Token";
+  const alt       = preferred === "raw" ? "Bearer" : "raw";
+
+  // 1st attempt
+  let headers = makeHeaders({ scheme: preferred, token: cookieToken, origin, passThroughAuth });
+  let { r, data } = await callUpstream(url, headers, payload);
+
+  // If auth failed and we built the header (i.e., client didn’t pass one), try alternate scheme once
+  if (r.status === 401 && !passThroughAuth && cookieToken) {
+    headers = makeHeaders({ scheme: alt, token: cookieToken, origin });
+    ({ r, data } = await callUpstream(url, headers, payload));
   }
 
-  const upstream = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload),
-    cache: "no-store",
-  });
-
-  const txt = await upstream.text();
-  let data: any; try { data = JSON.parse(txt); } catch { data = { raw: txt }; }
-
-  if (!upstream.ok) {
-    // mask token in diagnostics
-    const mask = (t?: string | null) => (t ? `${t.slice(0,6)}…${t.slice(-6)}` : null);
+  if (!r.ok) {
+    const mask = (t?: string) => (t ? `${t.slice(0,6)}…${t.slice(-6)}` : null);
     return NextResponse.json(
       {
         error: "logistics search failed",
         url,
         sent: payload,
-        upstreamStatus: upstream.status,
+        upstreamStatus: r.status,
         upstreamBody: data,
-        authSchemeUsed: authHeader ? authHeader.split(" ")[0] : null,
-        tokenSamples: {
-          cookieToken: mask(cookieToken),
-          authHeader: authHeader ? mask(authHeader.split(" ").slice(1).join(" ")) : null,
-        },
-        extraHeaders: {
-          xAccessToken: !!cookieToken,
-          xAuthToken: !!cookieToken,
-          cookieHeaderAccessToken: !!cookieToken,
-          xConsumer: !!process.env.SMV_CONSUMER,
-        },
+        authSchemeTried: passThroughAuth ? "pass-through" : preferred,
+        retriedWith: (r.status === 401 && !passThroughAuth && cookieToken) ? alt : null,
+        tokenSample: mask(cookieToken),
       },
-      { status: upstream.status }
+      { status: r.status }
     );
   }
 
