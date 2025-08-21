@@ -35,19 +35,12 @@ export async function POST(req: Request) {
         'Origin': origin,
         'Referer': origin + '/',
       },
-      body: JSON.stringify({
-        consumer,
-        method,
-        email,
-        phone,
-        retry: true,
-      }),
+      body: JSON.stringify({ consumer, method, email, phone, retry: true }),
       cache: 'no-store',
     });
 
     const text = await upstream.text();
-    let data: any = null;
-    try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    let data: any = null; try { data = JSON.parse(text); } catch { data = { raw: text }; }
 
     if (!upstream.ok) {
       return NextResponse.json(
@@ -56,13 +49,14 @@ export async function POST(req: Request) {
       );
     }
 
-    // Expect sessionId from upstream
-    const sessionId = data?.sessionId || data?.session_id || data?.data?.sessionId || null;
+    const session_id: string | null = data?.data?.session_id ?? null;
 
     return NextResponse.json({
       ok: true,
-      message: data?.message || 'OTP sent',
-      sessionId,
+      message: data?.data?.status || data?.message || 'OTP sent',
+      sessionId: session_id,     // camel for UI
+      session_id,                // snake for clarity
+      upstream: data,            // keep during debug (remove later if you want)
     });
   } catch (err: any) {
     return NextResponse.json(
