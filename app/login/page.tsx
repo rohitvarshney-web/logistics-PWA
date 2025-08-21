@@ -38,12 +38,15 @@ export default function LoginPage() {
     e.preventDefault();
     setError(null); setInfo(null);
     const r = await fetch('/api/auth/verify-otp', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ identifier, otp }) });
-    if (!r.ok) {
-      const js = await r.json().catch(()=>({}));
-      setError(js.error || 'Invalid OTP'); return;
-    }
-    window.location.href = '/';
+
+if (!r.ok) {
+  const js = await r.json().catch(()=>({}));
+  setError(js.error || JSON.stringify(js) || 'Invalid OTP');
+  if (js.upstreamStatus || js.upstreamBody) {
+    console.log('verify-otp upstream error:', js.upstreamStatus, js.upstreamBody, js.triedVariant);
   }
+  return;
+}
 
   return (
     <main className="container" style={{maxWidth:520}}>
