@@ -18,6 +18,7 @@ export async function POST(req: Request) {
     }
 
     const consumer = process.env.SMV_CONSUMER || 'nucleus';
+    const defaultRetry = (process.env.SMV_DEFAULT_RETRY ?? 'true').toString().toLowerCase() === 'true';
     const origin = req.headers.get('origin') || process.env.SMV_ORIGIN || 'https://internal.stampmyvisa.com';
 
     const email = method === 'EMAIL' ? identifier : '';
@@ -27,6 +28,14 @@ export async function POST(req: Request) {
     const path = process.env.SMV_SEND_OTP_PATH || '/v1/auth/send-login-otp';
     const url = `${base}${path}`;
 
+    const payload = {
+      consumer,
+      method,
+      email,
+      phone,
+      retry: defaultRetry,
+    };
+
     const upstream = await fetch(url, {
       method: 'POST',
       headers: {
@@ -35,7 +44,7 @@ export async function POST(req: Request) {
         'Origin': origin,
         'Referer': origin + '/',
       },
-      body: JSON.stringify({ consumer, method, email, phone, retry: true }),
+      body: JSON.stringify(payload),
       cache: 'no-store',
     });
 
@@ -44,19 +53,26 @@ export async function POST(req: Request) {
 
     if (!upstream.ok) {
       return NextResponse.json(
-        { error: 'send-otp failed', upstreamStatus: upstream.status, upstreamBody: data },
+        {
+          error: 'send-otp failed',
+          upstreamStatus: upstream.status,
+          upstreamBody: data,
+          url,
+          sent: payload,
+          usedHeaders: { Origin: origin, Referer: origin + '/' },
+        },
         { status: upstream.status }
       );
     }
 
-    const session_id: string | null = data?.data?.session_id ?? null;
+    // session id may be nested as data.session_id
+    const sessionId = data?.sessionId || data?.session_id || data?.data?.session_id || null;
 
     return NextResponse.json({
       ok: true,
       message: data?.data?.status || data?.message || 'OTP sent',
-      sessionId: session_id,     // camel for UI
-      session_id,                // snake for clarity
-      upstream: data,            // keep during debug (remove later if you want)
+      sessionId,
+      upstream: data, // keep for now; remove once stable
     });
   } catch (err: any) {
     return NextResponse.json(
