@@ -1,17 +1,27 @@
-// app/api/auth/verify-otp/route.ts
 import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
+const isMongoId = (s: string) => /^[a-fA-F0-9]{24}$/.test(s);
+
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
-    const sessionId = String(body.sessionId || body.session_id || '').trim();
-    const otp = String(body.otp || '').trim();
+    // Accept either camel or snake from the UI, but SEND camel to upstream
+    const sessionId = String(body.sessionId ?? body.session_id ?? '').trim();
+    const otp = String(body.otp ?? '').trim();
 
     if (!sessionId || !otp) {
       return NextResponse.json(
-        { error: 'sessionId/session_id and otp are required' },
+        { error: 'sessionId and otp are required' },
+        { status: 400 }
+      );
+    }
+
+    // Catch bad ids early so users re-request an OTP
+    if (!isMongoId(sessionId)) {
+      return NextResponse.json(
+        { error: 'sessionId must be a 24-char MongoDB ObjectId' },
         { status: 400 }
       );
     }
@@ -20,33 +30,59 @@ export async function POST(req: Request) {
     const path = process.env.SMV_VERIFY_OTP_PATH || '/v1/auth/verify-login-otp';
     const url = `${base}${path}`;
 
-    const origin = req.headers.get('origin') || process.env.SMV_ORIGIN || 'https://internal.stampmyvisa.com';
+    // Only send Origin/Referer if we actually have one configured or from browser
+    const originHeader = req.headers.get('origin') || process.env.SMV_ORIGIN || '';
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json, text/plain, */*',
+    };
+    if (originHeader) {
+      headers['Origin'] = originHeader;
+      headers['Referer'] = originHeader.replace(/\/$/, '') + '/';
+    }
 
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json, text/plain, */*',
-        'Origin': origin,
-        'Referer': origin + '/',
-      },
-      body: JSON.stringify({ session_id: sessionId, otp }), // snake_case for upstream
-      cache: 'no-store',
-    });
+    const payload = { sessionId, otp };
 
-    const text = await r.text();
-
-    if (!r.ok) {
-      let err: any = null; try { err = JSON.parse(text); } catch { err = { raw: text }; }
+    let upstream: Response;
+    try {
+      upstream = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        cache: 'no-store',
+      });
+    } catch (networkErr: any) {
       return NextResponse.json(
-        { error: 'verify-otp failed', upstreamStatus: r.status, upstreamBody: err },
-        { status: r.status }
+        {
+          error: 'verify-otp request failed (network)',
+          detail: String(networkErr),
+          url,
+          sent: payload,
+          usedHeaders: headers,
+        },
+        { status: 502 }
       );
     }
 
-    let data: any = null; try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    const raw = await upstream.text();
+    let data: any; try { data = JSON.parse(raw); } catch { data = { raw }; }
+
+    if (!upstream.ok) {
+      return NextResponse.json(
+        {
+          error: 'verify-otp failed',
+          upstreamStatus: upstream.status,
+          upstreamBody: data,
+          url,
+          sent: payload,
+          usedHeaders: headers,
+        },
+        { status: upstream.status }
+      );
+    }
 
     const token = data?.access_token || data?.token || null;
+
     const res = NextResponse.json({
       ok: true,
       user: data?.user ?? null,
@@ -54,7 +90,6 @@ export async function POST(req: Request) {
       message: data?.message || data?.data?.status || 'OTP verified',
     });
 
-    // If backend gave a token, save it
     if (token) {
       res.cookies.set('smv_token', token, {
         httpOnly: true,
@@ -65,7 +100,7 @@ export async function POST(req: Request) {
       });
     }
 
-    // Always set a lightweight flag so middleware can allow navigation
+    // lightweight flag so middleware allows navigation even if token absent
     res.cookies.set('smv_auth', 'ok', {
       httpOnly: true,
       secure: true,
