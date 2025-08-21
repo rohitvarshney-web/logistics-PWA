@@ -16,46 +16,29 @@ export default function LoginPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [debug, setDebug] = useState<any>(null); // ⬅️ show upstream details
 
-  // 🔻 After-logout cleanup: runs when landing on /login?logged_out=1
+  // cleanup after logout (optional, as we added earlier)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('logged_out') === '1') {
-      // Clear client storage
       try { localStorage.clear(); } catch {}
       try { sessionStorage.clear(); } catch {}
-
-      // Clear all caches (PWA/offline caches)
-      if ('caches' in window) {
-        caches.keys()
-          .then(keys => Promise.all(keys.map(k => caches.delete(k))))
-          .catch(() => {});
-      }
-
-      // Unregister all service workers
-      if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.getRegistrations()
-          .then(regs => Promise.all(regs.map(r => r.unregister())))
-          .catch(() => {});
-      }
-
-      // Replace URL to remove the query param
+      if ('caches' in window) { caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k)))); }
+      if ('serviceWorker' in navigator) { navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister())); }
       const clean = new URL(window.location.href);
       clean.searchParams.delete('logged_out');
       window.history.replaceState({}, '', clean.toString());
-
-      // Optional: small info toast
-      setInfo('You have been logged out. Caches cleared.');
     }
   }, []);
 
   async function sendOtp(e: React.FormEvent) {
     e.preventDefault();
-    setError(null); setInfo(null);
+    setError(null); setInfo(null); setDebug(null);
 
     const method = guessMethod(identifier);
 
-    // optional: check-user
+    // (optional) check-user
     const check = await fetch(`/api/auth/check-user?method=${method}&identifier=${encodeURIComponent(identifier)}`);
     if (!check.ok) {
       const js = await check.json().catch(() => ({}));
@@ -70,10 +53,25 @@ export default function LoginPage() {
     });
     const js = await r.json().catch(() => ({}));
 
-    if (!r.ok) { setError(js.error || 'Failed to send OTP'); return; }
+    if (!r.ok) {
+      const msg =
+        js?.upstreamBody?.message ||
+        js?.message ||
+        (typeof js?.upstreamBody === 'string' ? js.upstreamBody : '') ||
+        js?.error ||
+        'Failed to send OTP';
+      setError(msg);
+      setDebug(js); // ⬅️ show exact upstream + what we sent
+      console.log('send-otp upstream error:', js);
+      return;
+    }
 
     const sid = js.sessionId || js.session_id || js?.upstream?.data?.session_id || null;
-    if (!sid) { setError('OTP sent but session_id missing from server.'); return; }
+    if (!sid) {
+      setError('OTP sent but session_id missing from server.');
+      setDebug(js);
+      return;
+    }
 
     setSessionId(sid);
     setOtpSent(true);
@@ -102,11 +100,11 @@ export default function LoginPage() {
         js?.error ||
         'Invalid OTP';
       setError(`verify-otp failed${js.upstreamStatus ? ` (${js.upstreamStatus})` : ''}: ${msg}`);
+      setDebug(js);
       return;
     }
 
     setInfo(js.message || 'OTP verified');
-    // 🔁 move ahead
     router.replace('/dashboard');
   }
 
@@ -129,6 +127,14 @@ export default function LoginPage() {
           <button className="btn primary" type="submit">Send OTP</button>
           {info && <p className="label" style={{ marginTop: 12 }}>{info}</p>}
           {error && <p className="label" style={{ color:'#fca5a5', marginTop: 12 }}>{error}</p>}
+          {debug && (
+            <details style={{ marginTop: 12 }}>
+              <summary className="label">Debug (send-otp)</summary>
+              <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12 }}>
+                {JSON.stringify(debug, null, 2)}
+              </pre>
+            </details>
+          )}
         </form>
       ) : (
         <form onSubmit={verifyOtp} className="card">
@@ -140,13 +146,21 @@ export default function LoginPage() {
           <button
             className="btn"
             type="button"
-            onClick={() => { setOtpSent(false); setOtp(''); setSessionId(null); setInfo(null); setError(null); }}
+            onClick={() => { setOtpSent(false); setOtp(''); setSessionId(null); setInfo(null); setError(null); setDebug(null); }}
             style={{ marginLeft: 8 }}
           >
             Change identifier
           </button>
           {info && <p className="label" style={{ marginTop: 12 }}>{info}</p>}
           {error && <p className="label" style={{ color:'#fca5a5', marginTop: 12 }}>{error}</p>}
+          {debug && (
+            <details style={{ marginTop: 12 }}>
+              <summary className="label">Debug (verify-otp)</summary>
+              <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12 }}>
+                {JSON.stringify(debug, null, 2)}
+              </pre>
+            </details>
+          )}
         </form>
       )}
     </main>
