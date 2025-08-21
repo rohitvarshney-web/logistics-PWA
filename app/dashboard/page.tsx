@@ -8,33 +8,28 @@ export default function DashboardPage() {
   const [error, setError]       = useState<string|null>(null);
   const [result, setResult]     = useState<any>(null);
 
-  async function searchByPassport() {
-    setLoading('passport'); setError(null); setResult(null);
+  async function callSearch(body: Record<string, any>) {
     const r = await fetch('/api/smv/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ passport }),
+      body: JSON.stringify(body),
     });
     const js = await r.json().catch(()=>({}));
     if (!r.ok) {
       setError(js.error || js?.upstreamBody?.message || 'Search failed');
     }
     setResult(js);
+  }
+
+  async function searchByPassport() {
+    setLoading('passport'); setError(null); setResult(null);
+    await callSearch({ passport }); // unified route maps -> searchText
     setLoading(null);
   }
 
   async function searchByOrder() {
     setLoading('order'); setError(null); setResult(null);
-    const r = await fetch('/api/smv/search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orderId }),
-    });
-    const js = await r.json().catch(()=>({}));
-    if (!r.ok) {
-      setError(js.error || js?.upstreamBody?.message || 'Search failed');
-    }
-    setResult(js);
+    await callSearch({ orderId }); // unified route maps -> searchText
     setLoading(null);
   }
 
@@ -92,7 +87,7 @@ export default function DashboardPage() {
         )}
         {result && (
           <details open style={{ marginTop: 12 }}>
-            <summary className="label">Raw JSON</summary>
+            <summary className="label">Raw JSON (includes url & sent payload)</summary>
             <pre style={{ whiteSpace:'pre-wrap', fontSize:12 }}>
               {JSON.stringify(result, null, 2)}
             </pre>
