@@ -17,12 +17,6 @@ export default function DashboardPage() {
 
   async function callSearch(body: Record<string, any>, kind: 'passport' | 'order') {
     setLoading(kind); setError(null); setResult(null);
-    const r = await fetch('/api/smv/search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
-      credentials: 'include', // send cookies as well
-      body: JSON.stringify(body),
-    });
     const js = await r.json().catch(()=>({}));
     if (!r.ok) setError(js.error || js?.upstreamBody?.message || 'Search failed');
     setResult(js);
