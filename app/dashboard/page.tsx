@@ -21,6 +21,56 @@ function fmtDate(x: any) {
   return d.toLocaleString();
 }
 
+function AddressCell({ label, text, maxWidth = 280 }: { label: string; text?: string; maxWidth?: number }) {
+  const val = text?.trim() || '';
+  return (
+    <td style={{ padding: '8px', verticalAlign: 'top' }}>
+      <div style={{ maxWidth }}>
+        {/* 2-line clamp preview with tooltip */}
+        <div
+          title={val || label}
+          style={{
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            lineHeight: '1.3',
+            opacity: val ? 1 : 0.6,
+          }}
+        >
+          {val || '—'}
+        </div>
+
+        {/* Expandable full text */}
+        {val && (
+          <details style={{ marginTop: 6 }}>
+            <summary className="label" style={{ fontSize: 12, cursor: 'pointer' }}>
+              Expand
+            </summary>
+            <div
+              style={{
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                marginTop: 6,
+                padding: 8,
+                border: '1px solid #0001',
+                borderRadius: 8,
+                maxHeight: 240,
+                overflow: 'auto',
+                background: 'var(--card, #f8fafc)',
+              }}
+            >
+              {val}
+            </div>
+          </details>
+        )}
+      </div>
+    </td>
+  );
+}
+
 export default function DashboardPage() {
   // Inputs
   const [passport, setPassport] = useState('');
@@ -32,7 +82,7 @@ export default function DashboardPage() {
 
   // Optional filters (comma-separated -> arrays)
   const [statusCsv, setStatusCsv] = useState('');     // e.g. UNASSIGNED,PENDING
-  const [typeCsv, setTypeCsv] = useState('');         // e.g. PICKUP,DELIVERY
+  const [typeCsv, setTypeCsv] = useState('');         // e.g. SUBMISSION,PICKUP
   const [currentTask, setCurrentTask] = useState(''); // leave empty to omit
 
   // Auto-search toggle
@@ -291,30 +341,30 @@ export default function DashboardPage() {
               <thead>
                 <tr>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>SMV Order</th>
-                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Visa Order</th>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Passport</th>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Type</th>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Status</th>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Assigned For</th>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Appointment</th>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Travel End</th>
-                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Assignees</th>
-                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Experts</th>
+                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Pickup Address</th>
+                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Drop Address</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r: any) => (
                   <tr key={r._id} style={{ borderTop:'1px solid #2223', verticalAlign:'top' }}>
                     <td style={{ padding:'8px' }}>{r.smv_order_id || ''}</td>
-                    <td style={{ padding:'8px' }}>{r.visa_order_id || ''}</td>
                     <td style={{ padding:'8px', fontWeight:600 }}>{r.passport_number || ''}</td>
                     <td style={{ padding:'8px' }}>{r.type || ''}</td>
                     <td style={{ padding:'8px' }}>{r.status || ''}</td>
                     <td style={{ padding:'8px' }}>{r.assigned_for || ''}</td>
                     <td style={{ padding:'8px' }}>{fmtDate(r.appointment_date)}</td>
                     <td style={{ padding:'8px' }}>{fmtDate(r.travel_end_date)}</td>
-                    <td style={{ padding:'8px' }}>{Array.isArray(r.assignees) ? r.assignees.length : 0}</td>
-                    <td style={{ padding:'8px' }}>{Array.isArray(r.visa_experts) ? r.visa_experts.length : 0}</td>
+
+                    {/* NEW: addresses with pretty handling */}
+                    <AddressCell label="Pickup Address" text={r.pickup_address} />
+                    <AddressCell label="Drop Address"   text={r.drop_address} />
                   </tr>
                 ))}
               </tbody>
