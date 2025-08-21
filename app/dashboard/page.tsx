@@ -76,25 +76,29 @@ const BULK_STATUS_OPTIONS = [
   { value: 'PASSPORT_COURIERED', label: 'Passport Couriered' },
 ];
 
+/* Quick/passive heuristics for passport numbers (A-Z0-9, 7-9 chars typical) */
+const PASSPORT_REGEX = /\b([A-Z0-9]{7,10})\b/i;
+
+/* ---------- main ---------- */
 export default function DashboardPage() {
   /* inputs */
   const [passport, setPassport] = useState('');
-  const [orderId, setOrderId] = useState('');
+  const [orderId, setOrderId]   = useState('');
 
   /* pagination */
   const [limit, setLimit] = useState(10);
-  const [skip, setSkip] = useState(0);
+  const [skip, setSkip]   = useState(0);
 
   /* optional filters */
-  const [statusCsv, setStatusCsv] = useState('');
-  const [typeCsv, setTypeCsv] = useState('');
-  const [currentTask, setCurrentTask] = useState('');
+  const [statusCsv, setStatusCsv]       = useState('');
+  const [typeCsv, setTypeCsv]           = useState('');
+  const [currentTask, setCurrentTask]   = useState('');
 
   /* toggles/state */
   const [autoSearch, setAutoSearch] = useState(false);
-  const [loading, setLoading] = useState<LoadingKind>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<any>(null);
+  const [loading, setLoading]       = useState<LoadingKind>(null);
+  const [error, setError]           = useState<string | null>(null);
+  const [result, setResult]         = useState<any>(null);
 
   /* selection */
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -105,13 +109,20 @@ export default function DashboardPage() {
   const lastChangeRef = useRef<{ prev: Map<string, string | undefined>, ids: Set<string> } | null>(null);
   const [bulkStatus, setBulkStatus] = useState<string>('');
 
-  /* debounced values */
-  const dPassport = useDebounced(passport, 500);
-  const dOrderId  = useDebounced(orderId, 500);
-  const dLimit    = useDebounced(limit, 300);
-  const dSkip     = useDebounced(skip, 300);
-  const dStatusCsv = useDebounced(statusCsv, 500);
-  const dTypeCsv   = useDebounced(typeCsv, 500);
+  /* scan/upload UI */
+  const [scanOpen, setScanOpen]   = useState(false);
+  const [scanBusy, setScanBusy]   = useState(false);
+  const [scanFile, setScanFile]   = useState<File | null>(null);
+  const [scanPreview, setScanPreview] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  /* debounced */
+  const dPassport    = useDebounced(passport, 500);
+  const dOrderId     = useDebounced(orderId, 500);
+  const dLimit       = useDebounced(limit, 300);
+  const dSkip        = useDebounced(skip, 300);
+  const dStatusCsv   = useDebounced(statusCsv, 500);
+  const dTypeCsv     = useDebounced(typeCsv, 500);
   const dCurrentTask = useDebounced(currentTask, 500);
 
   const optionalBody = useMemo(() => {
@@ -134,15 +145,13 @@ export default function DashboardPage() {
         body: JSON.stringify(body),
       });
       if (r.status === 401) {
-        try { localStorage.removeItem('smv_token'); } catch {}
-        window.location.href = '/login?logged_out=1';
+        await hardLogout(true);
         return;
       }
       const txt = await r.text();
       let js: any; try { js = JSON.parse(txt); } catch { js = { raw: txt }; }
       if (!r.ok) setError(js?.error || js?.upstreamBody?.message || 'Search failed');
       setResult(js);
-      // keep selection across pages; clear if you prefer
     } catch (e: any) {
       setError(`Network error: ${String(e)}`);
     } finally {
@@ -150,7 +159,7 @@ export default function DashboardPage() {
     }
   }
 
-  /* manual actions */
+  /* manual search */
   function searchByPassport() {
     const s = passport.trim(); if (!s) return;
     return callSearch({ passport: s, ...optionalBody }, 'passport');
@@ -162,7 +171,7 @@ export default function DashboardPage() {
 
   /* enter to search */
   function onPassportKey(e: React.KeyboardEvent<HTMLInputElement>) { if (e.key === 'Enter') searchByPassport(); }
-  function onOrderKey(e: React.KeyboardEvent<HTMLInputElement>) { if (e.key === 'Enter') searchByOrder(); }
+  function onOrderKey(e: React.KeyboardEvent<HTMLInputElement>)    { if (e.key === 'Enter') searchByOrder(); }
 
   /* auto-search */
   useEffect(() => {
@@ -178,11 +187,37 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSearch, dOrderId, optionalBody]);
 
-  /* logout */
+  /* robust logout: clears SW, caches, local storage, server cookie, then hard-redirects */
+  async function hardLogout(fromAuthFail = false) {
+    try {
+      // 1) clear local tokens
+      try { localStorage.removeItem('smv_token'); } catch {}
+      try { sessionStorage.clear(); } catch {}
+
+      // 2) unregister service workers
+      if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.unregister().catch(() => {})));
+      }
+
+      // 3) clear caches (PWA, runtime, next-pwa etc.)
+      if (typeof caches !== 'undefined' && caches.keys) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k).catch(() => {})));
+      }
+
+      // 4) tell server to clear cookies/session
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include', cache: 'no-store' }).catch(() => {});
+
+    } finally {
+      // 5) hard reload to login (bypass bfcache)
+      const url = '/login?logged_out=1' + (fromAuthFail ? '&auth=fail' : '');
+      window.location.replace(url);
+    }
+  }
+
   async function logout() {
-    try { localStorage.removeItem('smv_token'); } catch {}
-    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
-    window.location.href = '/login?logged_out=1';
+    await hardLogout(false);
   }
 
   /* data extraction */
@@ -191,7 +226,7 @@ export default function DashboardPage() {
   const showingFrom = rows.length ? skip + 1 : 0;
   const showingTo   = rows.length ? skip + rows.length : 0;
 
-  /* quick lookup for current page */
+  /* quick lookup for page */
   const rowById = useMemo(() => {
     const m = new Map<string, any>();
     rows.forEach(r => m.set(String(r._id), r));
@@ -236,23 +271,18 @@ export default function DashboardPage() {
     const id = String(row._id);
     const local = localStatus.get(id);
     if (local !== undefined) return humanize(local);
-    // if backend starts sending logistics_status, show it:
     return humanize(row.logistics_status || '');
   }
 
   function applyBulkStatus() {
     if (!bulkStatus || selectedIds.size === 0) return;
-
-    // capture previous values for undo (local if present, else backend logistics_status if available)
     const prev = new Map<string, string | undefined>();
     selectedIds.forEach(id => {
       const curLocal = localStatus.get(id);
-      const backend = rowById.get(id)?.logistics_status;
+      const backend  = rowById.get(id)?.logistics_status;
       prev.set(id, curLocal !== undefined ? curLocal : backend);
     });
     lastChangeRef.current = { prev, ids: new Set(selectedIds) };
-
-    // immutable update of localStatus
     setLocalStatus(prevMap => {
       const next = new Map(prevMap);
       selectedIds.forEach(id => next.set(id, bulkStatus));
@@ -260,31 +290,118 @@ export default function DashboardPage() {
     });
   }
 
-  // Reset selected rows to the "previous" values captured by the last bulk change.
   function resetToPrevious() {
     const last = lastChangeRef.current;
     if (!last) return;
-
     setLocalStatus(prevMap => {
       const next = new Map(prevMap);
-      const targetIds = selectedIds.size > 0 ? selectedIds : last.ids; // if nothing selected, revert last batch
+      const targetIds = selectedIds.size > 0 ? selectedIds : last.ids;
       targetIds.forEach(id => {
         const prevVal = last.prev.get(id);
-        if (prevVal === undefined || prevVal === null || prevVal === '') {
-          next.delete(id); // revert to backend/default (no local override)
-        } else {
-          next.set(id, prevVal);
-        }
+        if (prevVal === undefined || prevVal === null || prevVal === '') next.delete(id);
+        else next.set(id, prevVal);
       });
       return next;
     });
   }
 
+  /* -------- Scan / Upload Passport ---------- */
+
+  function openScan() {
+    setScanOpen(true);
+    setScanBusy(false);
+    setScanFile(null);
+    setScanPreview(null);
+  }
+  function closeScan() {
+    setScanOpen(false);
+    setScanBusy(false);
+    setScanFile(null);
+    setScanPreview(null);
+  }
+  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0] || null;
+    setScanFile(f);
+    setScanPreview(f ? URL.createObjectURL(f) : null);
+  }
+
+  // Try quick client-side extraction:
+  async function tryExtractClient(file: File): Promise<string | null> {
+    // 1) filename heuristic
+    const nameHit = file.name.match(PASSPORT_REGEX)?.[1] || null;
+    if (nameHit) return nameHit.toUpperCase();
+
+    // 2) Barcode (if device supports) — might catch PDF417/QR on some docs
+    try {
+      // @ts-ignore
+      if ('BarcodeDetector' in window) {
+        // @ts-ignore
+        const bd = new window.BarcodeDetector({ formats: ['qr_code', 'pdf417', 'code_39', 'code_128'] });
+        const bitmap = await createImageBitmap(file);
+        const canvas = document.createElement('canvas');
+        canvas.width = bitmap.width; canvas.height = bitmap.height;
+        const ctx = canvas.getContext('2d')!;
+        ctx.drawImage(bitmap, 0, 0);
+        const blobs = await canvas.convertToBlob ? [await canvas.convertToBlob()] : [file];
+        const imgBitmap = await createImageBitmap(blobs[0]);
+        // @ts-ignore
+        const codes = await bd.detect(imgBitmap);
+        for (const c of codes || []) {
+          const m = (c.rawValue || '').match(PASSPORT_REGEX);
+          if (m) return m[1].toUpperCase();
+        }
+      }
+    } catch {}
+
+    // 3) give up client-side
+    return null;
+  }
+
+  // Server OCR fallback (implement in /api/smv/scan-passport)
+  async function tryExtractServer(file: File): Promise<string | null> {
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await fetch('/api/smv/scan-passport', {
+        method: 'POST',
+        body: fd,
+        credentials: 'include',
+      });
+      if (!r.ok) return null;
+      const js = await r.json().catch(() => ({}));
+      const val: string | undefined = js?.passport || js?.data?.passport;
+      if (val && PASSPORT_REGEX.test(val)) return val.toUpperCase();
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function extractAndSearch() {
+    if (!scanFile) return;
+    setScanBusy(true);
+    try {
+      let code = await tryExtractClient(scanFile);
+      if (!code) code = await tryExtractServer(scanFile);
+      if (!code) {
+        setError('Could not read passport from the image. Please try another photo or type it manually.');
+        return;
+      }
+      setPassport(code);
+      setScanOpen(false);
+      await callSearch({ passport: code, ...optionalBody }, 'passport');
+    } finally {
+      setScanBusy(false);
+    }
+  }
+
+  /* ---------- UI ---------- */
   return (
     <main className="container" style={{ maxWidth: 1200 }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
         <h1>SMV Logistics Console</h1>
         <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+          <button className="btn" onClick={openScan}>📷 Scan / Upload</button>
           <label className="label" style={{ display:'flex', alignItems:'center', gap:6 }}>
             <input type="checkbox" checked={autoSearch} onChange={(e) => setAutoSearch(e.target.checked)} />
             Auto-search
@@ -292,6 +409,51 @@ export default function DashboardPage() {
           <button className="btn" onClick={logout}>Logout</button>
         </div>
       </header>
+
+      {/* Scan / Upload drawer */}
+      {scanOpen && (
+        <section className="card" style={{ marginTop: 12 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <h3 className="label">Scan / Upload Passport</h3>
+            <button className="btn" onClick={closeScan}>Close</button>
+          </div>
+
+          <p className="label" style={{ marginTop: 8 }}>
+            Take a clear photo of the passport page with the MRZ lines, or upload an existing image/PDF.
+          </p>
+
+          <div style={{ display:'flex', gap:16, alignItems:'flex-start', flexWrap:'wrap', marginTop: 8 }}>
+            <div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*,application/pdf"
+                capture="environment"
+                onChange={onPickFile}
+              />
+              <div className="label" style={{ marginTop: 8, opacity: 0.8 }}>
+                Tip: On mobile, this opens the camera for a fresh capture.
+              </div>
+              <div style={{ marginTop: 12, display:'flex', gap:8 }}>
+                <button className="btn primary" onClick={extractAndSearch} disabled={!scanFile || scanBusy}>
+                  {scanBusy ? 'Reading…' : 'Extract & Search'}
+                </button>
+                <button className="btn" onClick={() => { setScanFile(null); setScanPreview(null); if (fileInputRef.current) fileInputRef.current.value=''; }}>
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            {scanPreview && (
+              <div style={{ border:'1px solid #0001', borderRadius: 8, padding: 8, maxWidth: 280 }}>
+                <div className="label" style={{ marginBottom: 6 }}>Preview</div>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={scanPreview} alt="preview" style={{ maxWidth: '100%', height: 'auto', borderRadius: 6 }} />
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* search */}
       <section className="card" style={{ marginTop: 16 }}>
@@ -303,14 +465,16 @@ export default function DashboardPage() {
               placeholder="e.g. W1184034"
               value={passport}
               onChange={(e) => setPassport(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') searchByPassport(); }}
+              onKeyDown={onPassportKey}
             />
           </div>
           <button className="btn primary" onClick={searchByPassport} disabled={!passport.trim() || loading === 'passport'}>
             {loading === 'passport' ? 'Searching…' : 'Search Passport'}
           </button>
         </div>
+
         <div style={{ height: 12 }} />
+
         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'end' }}>
           <div>
             <label className="label">Order ID</label>
@@ -319,7 +483,7 @@ export default function DashboardPage() {
               placeholder="e.g. SMV-SGP-07907"
               value={orderId}
               onChange={(e) => setOrderId(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') searchByOrder(); }}
+              onKeyDown={onOrderKey}
             />
           </div>
           <button className="btn" onClick={searchByOrder} disabled={!orderId.trim() || loading === 'order'}>
@@ -390,7 +554,6 @@ export default function DashboardPage() {
             <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
-                  {/* master select */}
                   <th style={{ width: 44, padding:'8px' }}>
                     <div style={{ display:'flex', alignItems:'center', justifyContent:'center' }}>
                       <input
@@ -436,8 +599,8 @@ export default function DashboardPage() {
                       <td style={{ padding:'8px' }}>{r.smv_order_id || ''}</td>
                       <td style={{ padding:'8px', fontWeight:600 }}>{r.passport_number || ''}</td>
                       <td style={{ padding:'8px' }}>{r.type || ''}</td>
-                      <td style={{ padding:'8px' }}>{r.status ?? '—'}</td> {/* API status */}
-                      <td style={{ padding:'8px' }}>{displayLogisticsStatus(r)}</td> {/* logistics overlay */}
+                      <td style={{ padding:'8px' }}>{r.status ?? '—'}</td>
+                      <td style={{ padding:'8px' }}>{displayLogisticsStatus(r)}</td>
                       <td style={{ padding:'8px' }}>{r.assigned_for || ''}</td>
                       <td style={{ padding:'8px' }}>{fmtDateTime(r.appointment_date)}</td>
                       <td style={{ padding:'8px' }}>{fmtDateOnly(r.travel_end_date)}</td>
