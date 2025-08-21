@@ -6,12 +6,12 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
-    const sessionId = String(body.sessionId || '').trim();
+    const sessionId = String(body.sessionId || body.session_id || '').trim();
     const otp = String(body.otp || '').trim();
 
     if (!sessionId || !otp) {
       return NextResponse.json(
-        { error: 'sessionId and otp are required' },
+        { error: 'sessionId/session_id and otp are required' },
         { status: 400 }
       );
     }
@@ -30,12 +30,11 @@ export async function POST(req: Request) {
         'Origin': origin,
         'Referer': origin + '/',
       },
-      body: JSON.stringify({ sessionId, otp }),
+      body: JSON.stringify({ session_id: sessionId, otp }), // <-- snake_case to backend
       cache: 'no-store',
     });
 
     const text = await r.text();
-
     if (!r.ok) {
       let err: any = null; try { err = JSON.parse(text); } catch { err = { raw: text }; }
       return NextResponse.json(
@@ -45,14 +44,13 @@ export async function POST(req: Request) {
     }
 
     let data: any = null; try { data = JSON.parse(text); } catch { data = { raw: text }; }
-
     const token = data?.access_token || data?.token || null;
 
     const res = NextResponse.json({
       ok: true,
       user: data?.user ?? null,
       token,
-      message: data?.message || 'OTP verified',
+      message: data?.message || data?.data?.status || 'OTP verified',
     });
 
     if (token) {
@@ -61,7 +59,7 @@ export async function POST(req: Request) {
         secure: true,
         sameSite: 'lax',
         path: '/',
-        maxAge: 60 * 60 * 8, // 8 hours
+        maxAge: 60 * 60 * 8,
       });
     }
 
