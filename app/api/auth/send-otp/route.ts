@@ -1,4 +1,3 @@
-// app/api/auth/send-otp/route.ts
 import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
@@ -18,11 +17,18 @@ export async function POST(req: Request) {
     }
 
     const consumer = process.env.SMV_CONSUMER || 'nucleus';
-    const defaultRetry = (process.env.SMV_DEFAULT_RETRY ?? 'true').toString().toLowerCase() === 'true';
-    const origin = req.headers.get('origin') || process.env.SMV_ORIGIN || 'https://internal.stampmyvisa.com';
+    const retry = (process.env.SMV_DEFAULT_RETRY ?? 'true').toString().toLowerCase() === 'true';
 
-    const email = method === 'EMAIL' ? identifier : '';
-    const phone = method === 'PHONE' ? identifier : '';
+    // only send Origin/Referer if we actually have one (prevents misleading origins)
+    const originHeader = req.headers.get('origin') || process.env.SMV_ORIGIN || '';
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json, text/plain, */*',
+    };
+    if (originHeader) {
+      headers['Origin'] = originHeader;
+      headers['Referer'] = originHeader.replace(/\/$/, '') + '/';
+    }
 
     const base = process.env.SMV_API_BASE || 'https://api.live.stampmyvisa.com';
     const path = process.env.SMV_SEND_OTP_PATH || '/v1/auth/send-login-otp';
@@ -31,48 +37,63 @@ export async function POST(req: Request) {
     const payload = {
       consumer,
       method,
-      email,
-      phone,
-      retry: defaultRetry,
+      email: method === 'EMAIL' ? identifier : '',
+      phone: method === 'PHONE' ? identifier : '',
+      retry,
     };
 
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json, text/plain, */*',
-        'Origin': origin,
-        'Referer': origin + '/',
-      },
-      body: JSON.stringify(payload),
-      cache: 'no-store',
-    });
+    let upstream: Response;
+    try {
+      upstream = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        cache: 'no-store',
+      });
+    } catch (networkErr: any) {
+      // Network layer failed — return JSON with detail
+      return NextResponse.json(
+        {
+          error: 'send-otp request failed (network)',
+          detail: String(networkErr),
+          url,
+          sent: payload,
+          usedHeaders: headers,
+        },
+        { status: 502 }
+      );
+    }
 
-    const text = await upstream.text();
-    let data: any = null; try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    const raw = await upstream.text();
+    // Try to parse JSON; if not JSON, preserve raw text so UI can show it
+    let body: any;
+    try { body = JSON.parse(raw); } catch { body = { raw }; }
 
     if (!upstream.ok) {
       return NextResponse.json(
         {
           error: 'send-otp failed',
           upstreamStatus: upstream.status,
-          upstreamBody: data,
+          upstreamBody: body,
           url,
           sent: payload,
-          usedHeaders: { Origin: origin, Referer: origin + '/' },
+          usedHeaders: headers,
         },
         { status: upstream.status }
       );
     }
 
-    // session id may be nested as data.session_id
-    const sessionId = data?.sessionId || data?.session_id || data?.data?.session_id || null;
+    const sessionId =
+      body?.sessionId ||
+      body?.session_id ||
+      body?.data?.session_id ||
+      null;
 
     return NextResponse.json({
       ok: true,
-      message: data?.data?.status || data?.message || 'OTP sent',
+      message: body?.data?.status || body?.message || 'OTP sent',
       sessionId,
-      upstream: data, // keep for now; remove once stable
+      upstream: body, // keep for debugging
     });
   } catch (err: any) {
     return NextResponse.json(
