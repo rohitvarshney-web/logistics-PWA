@@ -10,6 +10,7 @@ export default function LoginPage() {
   const [identifier, setIdentifier] = useState('');
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState('');
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
@@ -20,35 +21,38 @@ export default function LoginPage() {
 
     const method = guessMethod(identifier);
 
-    // 1) check-user
+    // 1) (optional) check-user
     const check = await fetch(
       `/api/auth/check-user?method=${method}&identifier=${encodeURIComponent(identifier)}`
     );
-
     if (!check.ok) {
       const js = await check.json().catch(() => ({}));
       setError(js.error || 'User not found or not allowed');
       return;
     }
 
-    const ch = await check.json().catch(() => ({}));
-    setInfo(ch?.message || 'User verified. Sending OTP…');
-
-    // 2) send-otp
+    // 2) send-otp -> expect sessionId
     const r = await fetch('/api/auth/send-otp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ identifier, method }),
     });
 
+    const js = await r.json().catch(() => ({}));
+
     if (!r.ok) {
-      const js = await r.json().catch(() => ({}));
       setError(js.error || 'Failed to send OTP');
       return;
     }
 
+    if (!js.sessionId) {
+      setError('OTP sent but sessionId missing from server. Please try again.');
+      return;
+    }
+
+    setSessionId(js.sessionId);
     setOtpSent(true);
-    setInfo('OTP sent. Check your inbox/phone.');
+    setInfo(js.message || 'OTP sent. Check your inbox/phone.');
   }
 
   async function verifyOtp(e: React.FormEvent) {
@@ -56,32 +60,33 @@ export default function LoginPage() {
     setError(null);
     setInfo(null);
 
-    const r = await fetch('/api/auth/verify-otp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier, otp }),
-    });
-
-    // ⬇️ Tiny UI tweak: surface upstream reason in console + friendly UI message
-    if (!r.ok) {
-      const js = await r.json().catch(() => ({}));
-      setError(js.error || JSON.stringify(js) || 'Invalid OTP');
-
-      if (js.upstreamStatus || js.upstreamBody) {
-        console.log(
-          'verify-otp upstream error:',
-          js.upstreamStatus,
-          js.upstreamBody,
-          js.triedVariant
-        );
-      }
+    if (!sessionId) {
+      setError('Missing sessionId. Please request OTP again.');
       return;
     }
 
-    // Success path
+    const r = await fetch('/api/auth/verify-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, otp: String(otp).trim() }),
+    });
+
     const js = await r.json().catch(() => ({}));
-    setInfo('Logged in successfully.');
-    // If you want to redirect after login, uncomment:
+
+    if (!r.ok) {
+      const msg =
+        js?.upstreamBody?.message ||
+        js?.message ||
+        (typeof js?.upstreamBody === 'string' ? js.upstreamBody : '') ||
+        js?.error ||
+        'Invalid OTP';
+      setError(`verify-otp failed${js.upstreamStatus ? ` (${js.upstreamStatus})` : ''}: ${msg}`);
+      console.log('verify-otp upstream error:', js);
+      return;
+    }
+
+    setInfo(js.message || 'Logged in successfully.');
+    // Optional: redirect after login
     // window.location.href = '/';
   }
 
@@ -133,6 +138,7 @@ export default function LoginPage() {
               setOtp('');
               setInfo(null);
               setError(null);
+              setSessionId(null);
             }}
             style={{ marginLeft: 8 }}
           >
