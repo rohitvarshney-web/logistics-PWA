@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 function guessMethod(identifier: string): 'EMAIL' | 'PHONE' {
@@ -16,6 +16,38 @@ export default function LoginPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+
+  // 🔻 After-logout cleanup: runs when landing on /login?logged_out=1
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('logged_out') === '1') {
+      // Clear client storage
+      try { localStorage.clear(); } catch {}
+      try { sessionStorage.clear(); } catch {}
+
+      // Clear all caches (PWA/offline caches)
+      if ('caches' in window) {
+        caches.keys()
+          .then(keys => Promise.all(keys.map(k => caches.delete(k))))
+          .catch(() => {});
+      }
+
+      // Unregister all service workers
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations()
+          .then(regs => Promise.all(regs.map(r => r.unregister())))
+          .catch(() => {});
+      }
+
+      // Replace URL to remove the query param
+      const clean = new URL(window.location.href);
+      clean.searchParams.delete('logged_out');
+      window.history.replaceState({}, '', clean.toString());
+
+      // Optional: small info toast
+      setInfo('You have been logged out. Caches cleared.');
+    }
+  }, []);
 
   async function sendOtp(e: React.FormEvent) {
     e.preventDefault();
