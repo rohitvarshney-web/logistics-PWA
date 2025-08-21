@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: smv-logistics-pwa
+    env: node
+    plan: free
+    region: oregon
+    branch: main
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: SMV_API_BASE
+        value: https://api.live.stampmyvisa.com
+      - key: SMV_CHECK_USER_PATH
+        value: /v1/auth/check-user
+      - key: SMV_SEND_OTP_PATH
+        value: /v1/auth/send-login-otp
+      - key: SMV_VERIFY_OTP_PATH
+        value: /v1/auth/verify-login-otp
+      # If your verify-otp returns an access_token, you do NOT need the following.
+      # - key: SMV_API_BEARER
+      #   value: <optional-fallback-token>
+      # - key: SMV_API_KEY_HEADER
+      #   value: x-api-key
+      # - key: SMV_API_KEY
+      #   value: <optional-api-key>
+      # Optional overrides
+      # - key: SMV_UPDATE_STATUS_PATH
+      #   value: /v1/logistics/update-status
+      # - key: NEXT_PUBLIC_BASE_URL
+      #   value: https://smv-logistics-pwa.onrender.com
