@@ -1,11 +1,11 @@
-// app/api/smv/search/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
+
 export const dynamic = "force-dynamic";
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  // derive searchText (passport/orderId convenience)
   const inBody = await req.json().catch(() => ({} as any));
-
-  // derive searchText from convenience inputs if not provided
   const raw =
     inBody.searchText ??
     inBody.passport ??
@@ -21,47 +21,73 @@ export async function POST(req: Request) {
     );
   }
 
-  // Coerce strict numeric types (backend is strict)
+  // coerce + defaults
   const limit = Number.isFinite(Number(inBody.limit)) ? Number(inBody.limit) : 10;
   const skip  = Number.isFinite(Number(inBody.skip))  ? Number(inBody.skip)  : 0;
 
-  // Must be an array of strings like ["created_at#!#-1"]
   let sort = inBody.sort ?? ["created_at#!#-1"];
   if (typeof sort === "string") sort = [sort];
-  if (!Array.isArray(sort) || sort.length === 0) sort = ["created_at#!#-1"];
+  if (!Array.isArray(sort) || !sort.length) sort = ["created_at#!#-1"];
 
   const type        = Array.isArray(inBody.type)    ? inBody.type    : [];
   const status      = Array.isArray(inBody.status)  ? inBody.status  : ["UNASSIGNED"];
   const filters     = Array.isArray(inBody.filters) ? inBody.filters : ["unassigned"];
   const currentTask = inBody.currentTask === undefined ? null : inBody.currentTask;
 
+  // 🔐 Authorization: prefer incoming header, else cookie smv_token
+  const cookieToken = cookies().get("smv_token")?.value;
+  const incomingAuth = req.headers.get("authorization");
+  const authHeader = incomingAuth || (cookieToken ? `Bearer ${cookieToken}` : "");
+
+  if (!authHeader) {
+    // fail fast so the UI tells user to log in again
+    return NextResponse.json(
+      { error: "Not authenticated. Missing Authorization bearer token." },
+      { status: 401 }
+    );
+  }
+
   const base   = process.env.SMV_API_BASE || "https://api.live.stampmyvisa.com";
-  const url    = `${base}/v1/logistics/search`; // hard-locked
-  const origin = req.headers.get("origin") || process.env.SMV_ORIGIN || "https://internal.stampmyvisa.com";
+  const url    = `${base}/v1/logistics/search`;
+  const origin = req.headers.get("origin") || process.env.SMV_ORIGIN || "";
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json, text/plain, */*",
+    Authorization: authHeader,                 // 👈 send token upstream
+  };
+  if (origin) {
+    headers["Origin"]  = origin;
+    headers["Referer"] = origin.replace(/\/$/, "") + "/";
+  }
 
   const payload = { searchText, limit, skip, sort, type, status, filters, currentTask };
 
-  const r = await fetch(url, {
+  const upstream = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Accept": "application/json, text/plain, */*",
-      "Origin": origin,
-      "Referer": origin + "/",
-    },
+    headers,
     body: JSON.stringify(payload),
     cache: "no-store",
   });
 
-  const txt = await r.text();
-  if (!r.ok) {
-    let err: any; try { err = JSON.parse(txt); } catch { err = { raw: txt }; }
-    return NextResponse.json(
-      { error: "logistics search failed", upstreamStatus: r.status, upstreamBody: err, sent: payload, url },
-      { status: r.status }
-    );
+  const txt = await upstream.text();
+  try {
+    const data = JSON.parse(txt);
+    if (!upstream.ok) {
+      return NextResponse.json(
+        { error: "logistics search failed", upstreamStatus: upstream.status, upstreamBody: data, sent: payload, url },
+        { status: upstream.status }
+      );
+    }
+    return NextResponse.json({ ok: true, result: data, sent: payload, url });
+  } catch {
+    // non-JSON upstream
+    if (!upstream.ok) {
+      return NextResponse.json(
+        { error: "logistics search failed", upstreamStatus: upstream.status, upstreamBody: { raw: txt }, sent: payload, url },
+        { status: upstream.status }
+      );
+    }
+    return NextResponse.json({ ok: true, result: { raw: txt }, sent: payload, url });
   }
-
-  let data: any; try { data = JSON.parse(txt); } catch { data = { raw: txt }; }
-  return NextResponse.json({ ok: true, result: data, sent: payload, url });
 }
