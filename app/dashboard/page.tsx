@@ -763,7 +763,7 @@ export default function DashboardPage() {
               <label className="label">Passport Number</label>
               <input
                 className="input"
-                placeholder="e.g. A0000000 or "
+                placeholder="e.g. A0000000"
                 value={passport}
                 onChange={(e) => setPassport(e.target.value)}
                 onKeyDown={onPassportKey}
