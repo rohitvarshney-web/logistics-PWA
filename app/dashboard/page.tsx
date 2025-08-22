@@ -218,26 +218,23 @@ export default function DashboardPage() {
   }
   async function logout() { await hardLogout(false); }
 
- /* data extraction (single/bulk combined) */
-const rows: any[] = result?.result?.data?.data || result?.rows || [];
-const total: number = result?.result?.data?.count ?? (Array.isArray(rows) ? rows.length : 0);
+  /* data extraction (single/bulk combined) */
+  const rows: any[] = result?.result?.data?.data || result?.rows || [];
+  const total: number = result?.result?.data?.count ?? (Array.isArray(rows) ? rows.length : 0);
 
-/**
- * Some upstream responses ignore limit/skip and return the full set.
- * To keep UX correct, we always slice on the client if we detect more
- * than `limit` rows were returned.
- */
-const pageRows = useMemo(() => {
-  if (!Array.isArray(rows)) return [];
-  // If server already paginated, rows.length <= limit — just use rows.
-  // If server returned the whole set (rows.length > limit), slice client-side.
-  if (rows.length > limit) return rows.slice(skip, skip + limit);
-  return rows;
-}, [rows, limit, skip]);
+  /**
+   * Some upstream responses ignore limit/skip and return the full set.
+   * To keep UX correct, we always slice on the client if we detect more
+   * than `limit` rows were returned.
+   */
+  const pageRows = useMemo(() => {
+    if (!Array.isArray(rows)) return [];
+    if (rows.length > limit) return rows.slice(skip, skip + limit);
+    return rows;
+  }, [rows, limit, skip]);
 
-const showingFrom = pageRows.length ? skip + 1 : 0;
-const showingTo   = pageRows.length ? skip + pageRows.length : 0;
-
+  const showingFrom = pageRows.length ? skip + 1 : 0;
+  const showingTo   = pageRows.length ? skip + pageRows.length : 0;
 
   /* quick lookup for page */
   const rowById = useMemo(() => {
@@ -246,8 +243,8 @@ const showingTo   = pageRows.length ? skip + pageRows.length : 0;
     return m;
   }, [rows]);
 
-  /* selection helpers */
-  const visibleIds = rows.map(r => String(r._id));
+  /* selection helpers — use only current page rows */
+  const visibleIds = pageRows.map(r => String(r._id));
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedIds.has(id));
   const someVisibleSelected = visibleIds.some(id => selectedIds.has(id)) && !allVisibleSelected;
   useEffect(() => { if (headerCheckboxRef.current) headerCheckboxRef.current.indeterminate = someVisibleSelected; }, [someVisibleSelected]);
@@ -319,44 +316,45 @@ const showingTo   = pageRows.length ? skip + pageRows.length : 0;
       return next;
     });
   }
+
   async function persistSelectedStatus() {
-  // Persist selected IDs with their localStatus to server
-  const ids = Array.from(selectedIds);
-  if (ids.length === 0) return;
-  setLoading('bulk');
-  try {
-    const tasks = ids
-      .map(id => ({ id, status: localStatus.get(id) }))
-      .filter(x => x.status && x.id);
+    // Persist selected IDs with their localStatus to server
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    setLoading('bulk');
+    try {
+      const tasks = ids
+        .map(id => ({ id, status: localStatus.get(id) }))
+        .filter(x => x.status && x.id);
 
-    if (tasks.length === 0) { setLoading(null); return; }
+      if (tasks.length === 0) { setLoading(null); return; }
 
-    const results = await Promise.allSettled(tasks.map(t =>
-      fetch('/api/smv/status-update', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        cache: 'no-store',
-        body: JSON.stringify({ orderId: t.id, status: t.status })
-      })
-    ));
+      const results = await Promise.allSettled(tasks.map(t =>
+        fetch('/api/smv/status-update', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          cache: 'no-store',
+          body: JSON.stringify({ orderId: t.id, status: t.status })
+        })
+      ));
 
-    const failures = results.filter(r => r.status === 'rejected' || (r.status==='fulfilled' && !r.value.ok));
-    if (failures.length > 0) {
-      setError(`${failures.length} update(s) failed. Try again or check auth.`);
-    } else {
-      setError(null);
+      const failures = results.filter(r => r.status === 'rejected' || (r.status==='fulfilled' && !r.value.ok));
+      if (failures.length > 0) {
+        setError(`${failures.length} update(s) failed. Try again or check auth.`);
+      } else {
+        setError(null);
+      }
+
+      // Refetch current page
+      const res = await callSearch(optionalBody, null);
+      if (res.ok) setResult(res);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(null);
     }
-
-    // Refetch current page
-    const res = await callSearch(optionalBody, null);
-    if (res.ok) setResult(res);
-  } catch (e) {
-    setError(String(e));
-  } finally {
-    setLoading(null);
   }
-}
 
   function resetToPrevious() {
     const last = lastChangeRef.current;
@@ -813,7 +811,13 @@ const showingTo   = pageRows.length ? skip + pageRows.length : 0;
                  onChange={(e)=>setSkip(Math.max(0, Number(e.target.value) || 0))} />
 
           <button className="btn" onClick={() => setSkip((s) => Math.max(0, s - limit))} disabled={skip === 0}>◀ Prev</button>
-          <button className="btn" onClick={() => setSkip((s) => s + limit)} disabled={(total && (skip + limit) >= total) || (!total && rows.length < limit)}>Next ▶</button>
+          <button
+            className="btn"
+            onClick={() => setSkip((s) => s + limit)}
+            disabled={(total && (skip + limit) >= total) || (!total && rows.length < limit)}
+          >
+            Next ▶
+          </button>
 
           <span className="label" style={{ marginLeft: 8 }}>
             {total ? `Showing ${showingFrom}-${showingTo} of ${total}` : rows.length ? `Showing ${rows.length}` : 'No results yet'}
@@ -834,13 +838,14 @@ const showingTo   = pageRows.length ? skip + pageRows.length : 0;
             </select>
             <button className="btn" onClick={applyBulkStatus} disabled={!bulkStatus || selectedIds.size === 0}>Apply to selected</button>
             <button className="btn" onClick={resetToPrevious} disabled={!lastChangeRef.current}>Reset to previous</button>
+            <button className="btn" onClick={persistSelectedStatus} disabled={selectedIds.size === 0}>Save to server</button>
             {selectedIds.size > 0 && <button className="btn" onClick={clearSelection}>Clear selection</button>}
           </div>
         </div>
 
         {error && <p className="label" style={{ color:'#fca5a5', marginTop: 8 }}>{error}</p>}
 
-        {rows && rows.length > 0 && (
+        {pageRows && pageRows.length > 0 && (
           <div style={{ overflowX: 'auto', marginTop: 12 }}>
             <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
@@ -859,9 +864,7 @@ const showingTo   = pageRows.length ? skip + pageRows.length : 0;
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>SMV Order</th>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Passport</th>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Type</th>
-                  {/* API status preserved as-is (now pill) */}
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Status</th>
-                  {/* Separate logistics status */}
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Logistics Status</th>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Assigned For</th>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Appointment</th>
@@ -871,7 +874,7 @@ const showingTo   = pageRows.length ? skip + pageRows.length : 0;
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r: any) => {
+                {pageRows.map((r: any) => {
                   const id = String(r._id);
                   const isSelected = selectedIds.has(id);
                   const apiStatus = (r.status ?? '').toString();
