@@ -770,7 +770,7 @@ export default function DashboardPage() {
               />
             </div>
             <button className="btn primary" onClick={searchByPassport} disabled={!passport.trim() || loading === 'passport'}>
-              {loading === 'passport' ? 'Searching…' : 'Search Passport'}
+              {loading === 'passport' ? 'Searching…' : 'Search'}
             </button>
           </div>
 
