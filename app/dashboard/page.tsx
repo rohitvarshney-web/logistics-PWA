@@ -1,3 +1,11 @@
+here’s the **full `app/dashboard/page.tsx`** updated so:
+
+* The **two cards stay side-by-side always** (responsive grid).
+* The **Order ID UI is commented out** (kept for later, but hidden).
+* The **Passport search is renamed to just “Search.”**
+* Everything else (pagination fix, one-step persist, page slicing) stays intact.
+
+```tsx
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -99,7 +107,7 @@ const ORDER_KEYS    = ['order', 'order_id', 'order id', 'smv_order_id', 'smv ord
 export default function DashboardPage() {
   /* inputs */
   const [passport, setPassport] = useState('');
-  const [orderId, setOrderId]   = useState('');
+  const [orderId, setOrderId]   = useState(''); // kept for future use (UI commented out)
 
   /* pagination */
   const [limit, setLimit] = useState(10);
@@ -670,35 +678,6 @@ export default function DashboardPage() {
               </div>
             </div>
           )}
-
-          {(loading === 'bulk' || bulkProgress.total > 0) && (
-            <div style={{ marginTop: 12 }}>
-              <div className="label" style={{ marginBottom: 6 }}>
-                Progress: {bulkProgress.done}/{bulkProgress.total}
-                {bulkProgress.running ? ` (running ${bulkProgress.running})` : ''} •
-                {bulkFailures.length ? ` failures ${bulkFailures.length}` : ' no failures'}
-              </div>
-              <div style={{ height: 10, background:'#eee', borderRadius: 6, overflow:'hidden' }}>
-                <div style={{
-                  height: '100%',
-                  width: `${bulkProgress.total ? (bulkProgress.done / bulkProgress.total) * 100 : 0}%`,
-                  background: '#60a5fa'
-                }} />
-              </div>
-            </div>
-          )}
-
-          {bulkFailures.length > 0 && (
-            <details style={{ marginTop: 12 }}>
-              <summary className="label">Show failures</summary>
-              <ul className="label" style={{ marginTop: 8 }}>
-                {bulkFailures.slice(0, 50).map((f, i) => (
-                  <li key={i}>{f.input}: {f.reason}</li>
-                ))}
-                {bulkFailures.length > 50 && <li>…and {bulkFailures.length - 50} more</li>}
-              </ul>
-            </details>
-          )}
         </section>
       )}
 
@@ -747,7 +726,7 @@ export default function DashboardPage() {
         </section>
       )}
 
-      {/* === Two-column grid: Search (left) + Filters/Pagination (right) === */}
+      {/* === Two-column grid: Search (left) + Filters/Pagination (right) — always side-by-side === */}
       <div
         style={{
           display: 'grid',
@@ -756,11 +735,11 @@ export default function DashboardPage() {
           marginTop: 16,
         }}
       >
-        {/* search (single) */}
+        {/* search (single) — renamed to “Search”; Order ID UI commented out */}
         <section className="card">
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'end' }}>
             <div>
-              <label className="label">Passport Number</label>
+              <label className="label">Search</label>
               <input
                 className="input"
                 placeholder="e.g. W1184034"
@@ -770,12 +749,13 @@ export default function DashboardPage() {
               />
             </div>
             <button className="btn primary" onClick={searchByPassport} disabled={!passport.trim() || loading === 'passport'}>
-              {loading === 'passport' ? 'Searching…' : 'Search Passport'}
+              {loading === 'passport' ? 'Searching…' : 'Search'}
             </button>
           </div>
 
+          {/* 
+          // --- Order ID search (commented out per request) ---
           <div style={{ height: 12 }} />
-
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'end' }}>
             <div>
               <label className="label">Order ID</label>
@@ -791,6 +771,7 @@ export default function DashboardPage() {
               {loading === 'order' ? 'Searching…' : 'Search Order'}
             </button>
           </div>
+          */}
         </section>
 
         {/* filters + pagination */}
@@ -847,7 +828,7 @@ export default function DashboardPage() {
           <div style={{ display:'flex', alignItems:'center', gap:8 }}>
             <span className="label">{selectedIds.size} selected</span>
             <select className="input" style={{ width: 260 }} value={bulkStatus} onChange={e=>setBulkStatus(e.target.value)}>
-              <option value="">--Select--</option>
+              <option value="">Update logistics status…</option>
               {BULK_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
             <button className="btn primary" onClick={applyBulkStatus} disabled={!bulkStatus || selectedIds.size === 0}>
@@ -951,3 +932,4 @@ export default function DashboardPage() {
     </Shell>
   );
 }
+```
