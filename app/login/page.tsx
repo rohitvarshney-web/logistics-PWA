@@ -106,11 +106,10 @@ export default function LoginPage() {
   return (
     <main className="container" style={{ maxWidth: 520 }}>
       <h1>Log in</h1>
-      <p className="label">Enter your email to receive an OTP.</p>
 
       {!otpSent ? (
         <form onSubmit={sendOtp} className="card">
-          <label className="label">Email</label>
+          <label className="label">Enter your email to receive an OTP.</label>
           <input
             className="input"
             placeholder="username@stampmyvisa.com"
