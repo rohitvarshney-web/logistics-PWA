@@ -2,10 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-type LoadingKind = 'passport' | 'order' | null;
+type LoadingKind = 'passport' | 'order' | 'bulk' | null;
 
 /* ---------- TS shims ---------- */
-// Some TS lib targets don’t declare this; keep it lightweight.
 declare global {
   interface Window { BarcodeDetector?: any }
 }
@@ -27,6 +26,11 @@ function fmtDateOnly(x: any) {
   const d = new Date(x);
   if (isNaN(d.getTime())) return '';
   return d.toLocaleDateString();
+}
+function csvEscape(s: string) {
+  if (s == null) return '';
+  const t = String(s);
+  return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
 }
 
 function AddressCell({ label, text, maxWidth = 280 }: { label: string; text?: string; maxWidth?: number }) {
@@ -82,8 +86,12 @@ const BULK_STATUS_OPTIONS = [
   { value: 'PASSPORT_COURIERED', label: 'Passport Couriered' },
 ];
 
-/* quick/passive passport heuristic */
+/* passport detection heuristic */
 const PASSPORT_REGEX = /\b([A-Z0-9]{7,10})\b/i;
+
+/* ----- column heuristics for bulk import ----- */
+const PASSPORT_KEYS = ['passport', 'passport_number', 'passport no', 'passportno', 'pp_no', 'pp', 'ppnumber'];
+const ORDER_KEYS    = ['order', 'order_id', 'order id', 'smv_order_id', 'smv order id', 'reference', 'ref', 'ref_no'];
 
 /* ---------- component ---------- */
 export default function DashboardPage() {
@@ -115,12 +123,22 @@ export default function DashboardPage() {
   const lastChangeRef = useRef<{ prev: Map<string, string | undefined>, ids: Set<string> } | null>(null);
   const [bulkStatus, setBulkStatus]   = useState<string>('');
 
-  /* scan/upload UI */
+  /* scan/upload UI (single image) */
   const [scanOpen, setScanOpen]       = useState(false);
   const [scanBusy, setScanBusy]       = useState(false);
   const [scanFile, setScanFile]       = useState<File | null>(null);
   const [scanPreview, setScanPreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  /* BULK file UI (csv/xlsx) */
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkFile, setBulkFile] = useState<File | null>(null);
+  const [bulkHeaders, setBulkHeaders] = useState<string[]>([]);
+  const [bulkRows, setBulkRows] = useState<Record<string, any>[]>([]);
+  const [bulkPassportCol, setBulkPassportCol] = useState<string>('');
+  const [bulkOrderCol, setBulkOrderCol] = useState<string>('');
+  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number; running: number; failed: number }>({ done: 0, total: 0, running: 0, failed: 0 });
+  const [bulkFailures, setBulkFailures] = useState<Array<{ input: string; reason: string }>>([]);
 
   /* debounced */
   const dPassport    = useDebounced(passport, 500);
@@ -142,7 +160,7 @@ export default function DashboardPage() {
   }, [dLimit, dSkip, dStatusCsv, dTypeCsv, dCurrentTask]);
 
   async function callSearch(body: Record<string, any>, kind: LoadingKind) {
-    setLoading(kind); setError(null); setResult(null);
+    setLoading(kind); if (kind !== 'bulk') { setError(null); setResult(null); }
     try {
       const r = await fetch('/api/smv/search', {
         method: 'POST',
@@ -150,15 +168,17 @@ export default function DashboardPage() {
         credentials: 'include',
         body: JSON.stringify(body),
       });
-      if (r.status === 401) { await hardLogout(true); return; }
+      if (r.status === 401) { await hardLogout(true); return { ok: false, reason: 'unauthorized' }; }
       const txt = await r.text();
       let js: any; try { js = JSON.parse(txt); } catch { js = { raw: txt }; }
-      if (!r.ok) setError(js?.error || js?.upstreamBody?.message || 'Search failed');
-      setResult(js);
+      if (!r.ok) return { ok: false, reason: js?.error || js?.upstreamBody?.message || 'Search failed', raw: js };
+      if (kind !== 'bulk') setResult(js);
+      return { ok: true, data: js };
     } catch (e: any) {
-      setError(`Network error: ${String(e)}`);
+      if (kind !== 'bulk') setError(`Network error: ${String(e)}`);
+      return { ok: false, reason: String(e) };
     } finally {
-      setLoading(null);
+      if (kind !== 'bulk') setLoading(null);
     }
   }
 
@@ -195,8 +215,8 @@ export default function DashboardPage() {
   }
   async function logout() { await hardLogout(false); }
 
-  /* data extraction */
-  const rows: any[] = result?.result?.data?.data || [];
+  /* data extraction (single/bulk combined) */
+  const rows: any[] = result?.result?.data?.data || result?.rows || []; // allow bulk to inject `rows`
   const total: number = result?.result?.data?.count ?? (Array.isArray(rows) ? rows.length : 0);
   const showingFrom = rows.length ? skip + 1 : 0;
   const showingTo   = rows.length ? skip + rows.length : 0;
@@ -264,7 +284,6 @@ export default function DashboardPage() {
       return next;
     });
   }
-
   function resetToPrevious() {
     const last = lastChangeRef.current;
     if (!last) return;
@@ -280,7 +299,7 @@ export default function DashboardPage() {
     });
   }
 
-  /* -------- Scan / Upload Passport ---------- */
+  /* -------- Scan / Upload (single image) ---------- */
   function openScan() { setScanOpen(true); setScanBusy(false); setScanFile(null); setScanPreview(null); }
   function closeScan() { setScanOpen(false); setScanBusy(false); setScanFile(null); setScanPreview(null); }
   function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -288,22 +307,15 @@ export default function DashboardPage() {
     setScanFile(f);
     setScanPreview(f ? URL.createObjectURL(f) : null);
   }
-
-  // Client-side extraction (no canvas.convertToBlob; images only)
   async function tryExtractClient(file: File): Promise<string | null> {
-    // 1) filename heuristic
     const nameHit = file.name.match(PASSPORT_REGEX)?.[1] || null;
     if (nameHit) return nameHit.toUpperCase();
-
-    // images only for client detector; PDFs go to server OCR
     if (!file.type || !file.type.startsWith('image/')) return null;
-
-    // 2) BarcodeDetector if supported
     try {
       const BD = window.BarcodeDetector;
       if (BD) {
         const bd = new BD({ formats: ['qr_code', 'pdf417', 'code_39', 'code_128'] });
-        const bitmap = await createImageBitmap(file);           // pass ImageBitmap directly
+        const bitmap = await createImageBitmap(file);
         const codes = await bd.detect(bitmap);
         for (const c of codes || []) {
           const raw = String(c?.rawValue ?? '');
@@ -311,12 +323,9 @@ export default function DashboardPage() {
           if (m) return m[1].toUpperCase();
         }
       }
-    } catch {/* swallow and fallback to server */}
-
+    } catch {}
     return null;
   }
-
-  // Server OCR fallback stub (wire your OCR later)
   async function tryExtractServer(file: File): Promise<string | null> {
     try {
       const fd = new FormData();
@@ -327,11 +336,8 @@ export default function DashboardPage() {
       const val: string | undefined = js?.passport || js?.data?.passport;
       if (val && PASSPORT_REGEX.test(val)) return val.toUpperCase();
       return null;
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }
-
   async function extractAndSearch() {
     if (!scanFile) return;
     setScanBusy(true);
@@ -342,9 +348,193 @@ export default function DashboardPage() {
       setPassport(code);
       setScanOpen(false);
       await callSearch({ passport: code, ...optionalBody }, 'passport');
-    } finally {
-      setScanBusy(false);
+    } finally { setScanBusy(false); }
+  }
+
+  /* -------- BULK SEARCH (CSV / XLSX) ---------- */
+  function openBulk() {
+    setBulkOpen(true); setBulkFile(null); setBulkHeaders([]); setBulkRows([]);
+    setBulkPassportCol(''); setBulkOrderCol('');
+    setBulkProgress({ done: 0, total: 0, running: 0, failed: 0 }); setBulkFailures([]);
+  }
+  function closeBulk() {
+    setBulkOpen(false);
+  }
+  function onBulkFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0] || null;
+    if (!f) return;
+    setBulkFile(f);
+    parseBulkFile(f);
+  }
+
+  function simpleParseCsv(text: string): { headers: string[]; rows: Record<string, any>[] } {
+    // very simple CSV (handles quoted fields and commas)
+    const lines = text.replace(/\r/g, '').split('\n').filter(Boolean);
+    if (lines.length === 0) return { headers: [], rows: [] };
+    const parseLine = (ln: string) => {
+      const out: string[] = [];
+      let cur = '', inQ = false;
+      for (let i = 0; i < ln.length; i++) {
+        const ch = ln[i];
+        if (inQ) {
+          if (ch === '"' && ln[i+1] === '"') { cur += '"'; i++; }
+          else if (ch === '"') { inQ = false; }
+          else cur += ch;
+        } else {
+          if (ch === ',') { out.push(cur); cur = ''; }
+          else if (ch === '"') { inQ = true; }
+          else cur += ch;
+        }
+      }
+      out.push(cur);
+      return out;
+    };
+    const headers = parseLine(lines[0]).map(h => h.trim());
+    const rows = lines.slice(1).map(l => {
+      const cells = parseLine(l);
+      const r: Record<string, any> = {};
+      headers.forEach((h, i) => r[h] = (cells[i] ?? '').trim());
+      return r;
+    });
+    return { headers, rows };
+  }
+
+  async function parseBulkFile(file: File) {
+    try {
+      // CSV quick path
+      if (file.name.toLowerCase().endsWith('.csv')) {
+        const txt = await file.text();
+        const { headers, rows } = simpleParseCsv(txt);
+        applyBulkParsed(headers, rows);
+        return;
+      }
+
+      // XLSX path (dynamic import to avoid bundling if unused)
+      const okXlsx = await importXlsxIfAvailable();
+      if (!okXlsx) {
+        setError('XLSX parsing requires the "xlsx" package. Run: npm i xlsx');
+        return;
+      }
+      const XLSX = okXlsx as any;
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const sheetName = wb.SheetNames[0];
+      const sheet = wb.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' }) as Record<string, any>[];
+      const headers = rows.length ? Object.keys(rows[0]) : [];
+      applyBulkParsed(headers, rows);
+    } catch (e: any) {
+      setError(`Failed to parse file: ${String(e)}`);
     }
+  }
+
+  async function importXlsxIfAvailable(): Promise<unknown | null> {
+    try {
+      // @ts-ignore
+      const mod = await import('xlsx');
+      return mod;
+    } catch {
+      return null;
+    }
+  }
+
+  function applyBulkParsed(headers: string[], rows: Record<string, any>[]) {
+    setBulkHeaders(headers);
+    setBulkRows(rows);
+
+    // auto-detect columns
+    const lower = headers.map(h => h.toLowerCase());
+    const findIn = (keys: string[]) => {
+      for (const k of keys) {
+        const idx = lower.indexOf(k);
+        if (idx >= 0) return headers[idx];
+      }
+      return '';
+    };
+    const pcol = findIn(PASSPORT_KEYS);
+    const ocol = findIn(ORDER_KEYS);
+    setBulkPassportCol(pcol);
+    setBulkOrderCol(ocol);
+  }
+
+  function deriveBulkJobs(): Array<{ passport?: string; orderId?: string; raw: any }> {
+    const jobs: Array<{ passport?: string; orderId?: string; raw: any }> = [];
+    const seen = new Set<string>();
+
+    for (const r of bulkRows) {
+      const p = String((bulkPassportCol ? r[bulkPassportCol] : '') || '').trim();
+      const o = String((bulkOrderCol ? r[bulkOrderCol] : '') || '').trim();
+
+      if (!p && !o) continue;
+
+      let key = '';
+      if (p) key = `P:${p.toUpperCase()}`;
+      else key = `O:${o.toUpperCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const job: any = { raw: r };
+      if (p) job.passport = p.toUpperCase();
+      if (o) job.orderId  = o.toUpperCase();
+      jobs.push(job);
+    }
+    return jobs;
+  }
+
+  async function runBulkSearch() {
+    const jobs = deriveBulkJobs();
+    if (jobs.length === 0) { setError('No valid rows found. Choose the correct columns or check your file.'); return; }
+
+    setLoading('bulk');
+    setError(null);
+    setBulkFailures([]);
+    setBulkProgress({ done: 0, total: jobs.length, running: 0, failed: 0 });
+
+    const concurrency = 4;
+    let index = 0;
+    const outRows: any[] = [];
+
+    async function worker() {
+      while (true) {
+        const i = index++;
+        if (i >= jobs.length) return;
+        const job = jobs[i];
+
+        setBulkProgress(p => ({ ...p, running: p.running + 1 }));
+        const body = job.passport ? { passport: job.passport, ...optionalBody } : { orderId: job.orderId, ...optionalBody };
+        const res = await callSearch(body, 'bulk');
+
+        if (res?.ok) {
+          // normalize to array of rows
+          const rows: any[] = res.data?.result?.data?.data || [];
+          if (Array.isArray(rows) && rows.length > 0) outRows.push(...rows);
+          else setBulkFailures(f => [...f, { input: job.passport || job.orderId || 'UNKNOWN', reason: 'No matching rows' }]);
+        } else {
+          setBulkFailures(f => [...f, { input: job.passport || job.orderId || 'UNKNOWN', reason: res?.reason || 'Failed' }]);
+        }
+        setBulkProgress(p => ({ ...p, running: p.running - 1, done: p.done + 1, failed: res?.ok ? p.failed : p.failed + 1 }));
+      }
+    }
+
+    const workers = Array.from({ length: concurrency }, () => worker());
+    await Promise.all(workers);
+
+    setLoading(null);
+
+    // Merge/replace current table with bulk results
+    setResult({ rows: outRows });
+    setSelectedIds(new Set());
+  }
+
+  function downloadFailuresCsv() {
+    if (bulkFailures.length === 0) return;
+    const header = 'input,reason\n';
+    const body = bulkFailures.map(r => `${csvEscape(r.input)},${csvEscape(r.reason)}`).join('\n');
+    const blob = new Blob([header + body], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'bulk-failures.csv'; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
 
   /* ---------- UI ---------- */
@@ -353,6 +543,7 @@ export default function DashboardPage() {
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
         <h1>SMV Logistics Console</h1>
         <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+          <button className="btn" onClick={openBulk}>📑 Bulk Search</button>
           <button className="btn" onClick={openScan}>📷 Scan / Upload</button>
           <label className="label" style={{ display:'flex', alignItems:'center', gap:6 }}>
             <input type="checkbox" checked={autoSearch} onChange={(e) => setAutoSearch(e.target.checked)} />
@@ -362,7 +553,85 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      {/* Scan / Upload drawer */}
+      {/* Bulk search panel */}
+      {bulkOpen && (
+        <section className="card" style={{ marginTop: 12 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <h3 className="label">Bulk Search (CSV / XLSX)</h3>
+            <button className="btn" onClick={closeBulk}>Close</button>
+          </div>
+
+          <div style={{ display:'grid', gridTemplateColumns: '1fr auto', gap: 12, alignItems:'end', marginTop: 8 }}>
+            <div>
+              <label className="label">Upload file</label>
+              <input type="file" accept=".csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx" onChange={onBulkFile} />
+              <p className="label" style={{ marginTop: 6, opacity: .8 }}>
+                Auto-detects a <em>Passport</em> or <em>Order ID</em> column. You can override below.
+              </p>
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <button className="btn primary" onClick={runBulkSearch} disabled={!bulkRows.length || loading === 'bulk'}>
+                {loading === 'bulk' ? 'Searching…' : 'Run Bulk Search'}
+              </button>
+              {bulkFailures.length > 0 && (
+                <button className="btn" onClick={downloadFailuresCsv}>Download failures</button>
+              )}
+            </div>
+          </div>
+
+          {bulkHeaders.length > 0 && (
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginTop: 12 }}>
+              <div>
+                <label className="label">Passport column</label>
+                <select className="input" value={bulkPassportCol} onChange={e=>setBulkPassportCol(e.target.value)}>
+                  <option value="">— none —</option>
+                  {bulkHeaders.map(h => <option key={`p-${h}`} value={h}>{h}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="label">Order ID column</label>
+                <select className="input" value={bulkOrderCol} onChange={e=>setBulkOrderCol(e.target.value)}>
+                  <option value="">— none —</option>
+                  {bulkHeaders.map(h => <option key={`o-${h}`} value={h}>{h}</option>)}
+                </select>
+              </div>
+            </div>
+          )}
+
+          {/* Progress */}
+          {(loading === 'bulk' || bulkProgress.total > 0) && (
+            <div style={{ marginTop: 12 }}>
+              <div className="label" style={{ marginBottom: 6 }}>
+                Progress: {bulkProgress.done}/{bulkProgress.total}
+                {bulkProgress.running ? ` (running ${bulkProgress.running})` : ''} •
+                {bulkFailures.length ? ` failures ${bulkFailures.length}` : ' no failures'}
+              </div>
+              <div style={{ height: 10, background:'#eee', borderRadius: 6, overflow:'hidden' }}>
+                <div style={{
+                  height: '100%',
+                  width: `${bulkProgress.total ? (bulkProgress.done / bulkProgress.total) * 100 : 0}%`,
+                  background: '#60a5fa'
+                }} />
+              </div>
+            </div>
+          )}
+
+          {/* Failures preview */}
+          {bulkFailures.length > 0 && (
+            <details style={{ marginTop: 12 }}>
+              <summary className="label">Show failures</summary>
+              <ul className="label" style={{ marginTop: 8 }}>
+                {bulkFailures.slice(0, 50).map((f, i) => (
+                  <li key={i}>{f.input}: {f.reason}</li>
+                ))}
+                {bulkFailures.length > 50 && <li>…and {bulkFailures.length - 50} more</li>}
+              </ul>
+            </details>
+          )}
+        </section>
+      )}
+
+      {/* Scan / Upload drawer (single image) */}
       {scanOpen && (
         <section className="card" style={{ marginTop: 12 }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
@@ -407,7 +676,7 @@ export default function DashboardPage() {
         </section>
       )}
 
-      {/* search */}
+      {/* search (single) */}
       <section className="card" style={{ marginTop: 16 }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'end' }}>
           <div>
@@ -551,8 +820,8 @@ export default function DashboardPage() {
                       <td style={{ padding:'8px' }}>{r.smv_order_id || ''}</td>
                       <td style={{ padding:'8px', fontWeight:600 }}>{r.passport_number || ''}</td>
                       <td style={{ padding:'8px' }}>{r.type || ''}</td>
-                      <td style={{ padding:'8px' }}>{r.status ?? '—'}</td> {/* API status */}
-                      <td style={{ padding:'8px' }}>{displayLogisticsStatus(r)}</td> {/* logistics overlay */}
+                      <td style={{ padding:'8px' }}>{r.status ?? '—'}</td>
+                      <td style={{ padding:'8px' }}>{displayLogisticsStatus(r)}</td>
                       <td style={{ padding:'8px' }}>{r.assigned_for || ''}</td>
                       <td style={{ padding:'8px' }}>{fmtDateTime(r.appointment_date)}</td>
                       <td style={{ padding:'8px' }}>{fmtDateOnly(r.travel_end_date)}</td>
