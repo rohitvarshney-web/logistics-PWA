@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import Shell, { StatusPill } from '@/components/ui/Shell';
 
 type LoadingKind = 'passport' | 'order' | 'bulk' | null;
 
@@ -33,6 +34,7 @@ function csvEscape(s: string) {
   return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
 }
 
+/* address cell with clamp + expandable details */
 function AddressCell({ label, text, maxWidth = 280 }: { label: string; text?: string; maxWidth?: number }) {
   const val = (text ?? '').trim();
   return (
@@ -216,7 +218,7 @@ export default function DashboardPage() {
   async function logout() { await hardLogout(false); }
 
   /* data extraction (single/bulk combined) */
-  const rows: any[] = result?.result?.data?.data || result?.rows || []; // allow bulk to inject `rows`
+  const rows: any[] = result?.result?.data?.data || result?.rows || [];
   const total: number = result?.result?.data?.count ?? (Array.isArray(rows) ? rows.length : 0);
   const showingFrom = rows.length ? skip + 1 : 0;
   const showingTo   = rows.length ? skip + rows.length : 0;
@@ -267,6 +269,23 @@ export default function DashboardPage() {
     const local = localStatus.get(id);
     if (local !== undefined) return humanize(local);
     return humanize(row.logistics_status || '');
+  }
+  function logisticsKind(row: any): 'green'|'orange'|'blue'|'purple'|'gray' {
+    const v = (localStatus.get(String(row._id)) ?? row.logistics_status ?? '').toString();
+    if (v === 'PASSPORT_RECEIVED') return 'green';
+    if (v === 'APPLICATIONS_SUBMITTED') return 'orange';
+    if (v === 'DOCUMENTS_RECEIVED') return 'blue';
+    if (v === 'PASSPORT_COURIERED') return 'purple';
+    return 'gray';
+  }
+  function apiStatusKind(v: string): 'green'|'orange'|'blue'|'purple'|'gray' {
+    if (!v) return 'gray';
+    const s = v.toUpperCase();
+    if (s.includes('UNASSIGNED')) return 'gray';
+    if (s.includes('SUBMISSION') || s.includes('SUBMITTED')) return 'orange';
+    if (s.includes('COLLECTION') || s.includes('RECEIVED')) return 'green';
+    if (s.includes('OVERDUE')) return 'purple';
+    return 'blue';
   }
 
   function applyBulkStatus() {
@@ -368,7 +387,6 @@ export default function DashboardPage() {
   }
 
   function simpleParseCsv(text: string): { headers: string[]; rows: Record<string, any>[] } {
-    // very simple CSV (handles quoted fields and commas)
     const lines = text.replace(/\r/g, '').split('\n').filter(Boolean);
     if (lines.length === 0) return { headers: [], rows: [] };
     const parseLine = (ln: string) => {
@@ -401,15 +419,12 @@ export default function DashboardPage() {
 
   async function parseBulkFile(file: File) {
     try {
-      // CSV quick path
       if (file.name.toLowerCase().endsWith('.csv')) {
         const txt = await file.text();
         const { headers, rows } = simpleParseCsv(txt);
         applyBulkParsed(headers, rows);
         return;
       }
-
-      // XLSX path (dynamic import to avoid bundling if unused)
       const okXlsx = await importXlsxIfAvailable();
       if (!okXlsx) {
         setError('XLSX parsing requires the "xlsx" package. Run: npm i xlsx');
@@ -441,8 +456,6 @@ export default function DashboardPage() {
   function applyBulkParsed(headers: string[], rows: Record<string, any>[]) {
     setBulkHeaders(headers);
     setBulkRows(rows);
-
-    // auto-detect columns
     const lower = headers.map(h => h.toLowerCase());
     const findIn = (keys: string[]) => {
       for (const k of keys) {
@@ -505,7 +518,6 @@ export default function DashboardPage() {
         const res = await callSearch(body, 'bulk');
 
         if (res?.ok) {
-          // normalize to array of rows
           const rows: any[] = res.data?.result?.data?.data || [];
           if (Array.isArray(rows) && rows.length > 0) outRows.push(...rows);
           else setBulkFailures(f => [...f, { input: job.passport || job.orderId || 'UNKNOWN', reason: 'No matching rows' }]);
@@ -520,8 +532,6 @@ export default function DashboardPage() {
     await Promise.all(workers);
 
     setLoading(null);
-
-    // Merge/replace current table with bulk results
     setResult({ rows: outRows });
     setSelectedIds(new Set());
   }
@@ -537,22 +547,29 @@ export default function DashboardPage() {
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
 
-  /* ---------- UI ---------- */
+  /* ------------- UI ------------- */
   return (
-    <main className="container" style={{ maxWidth: 1200 }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-        <h1>SMV Logistics Console</h1>
-        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-          <button className="btn" onClick={openBulk}>📑 Bulk Search</button>
-          <button className="btn" onClick={openScan}>📷 Scan / Upload</button>
+    <Shell
+      title="Logistics Console"
+      active="dashboard"
+      rightActions={
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <button className="btn" onClick={openBulk}>
+            <span className="material-symbols-outlined">table_view</span> Bulk Search
+          </button>
+          <button className="btn" onClick={openScan}>
+            <span className="material-symbols-outlined">photo_camera</span> Scan / Upload
+          </button>
           <label className="label" style={{ display:'flex', alignItems:'center', gap:6 }}>
             <input type="checkbox" checked={autoSearch} onChange={(e) => setAutoSearch(e.target.checked)} />
             Auto-search
           </label>
-          <button className="btn" onClick={logout}>Logout</button>
+          <button className="btn" onClick={logout}>
+            <span className="material-symbols-outlined">logout</span> Logout
+          </button>
         </div>
-      </header>
-
+      }
+    >
       {/* Bulk search panel */}
       {bulkOpen && (
         <section className="card" style={{ marginTop: 12 }}>
@@ -598,7 +615,6 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {/* Progress */}
           {(loading === 'bulk' || bulkProgress.total > 0) && (
             <div style={{ marginTop: 12 }}>
               <div className="label" style={{ marginBottom: 6 }}>
@@ -616,7 +632,6 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {/* Failures preview */}
           {bulkFailures.length > 0 && (
             <details style={{ marginTop: 12 }}>
               <summary className="label">Show failures</summary>
@@ -789,7 +804,7 @@ export default function DashboardPage() {
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>SMV Order</th>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Passport</th>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Type</th>
-                  {/* API status preserved as-is */}
+                  {/* API status preserved as-is (now pill) */}
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Status</th>
                   {/* Separate logistics status */}
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Logistics Status</th>
@@ -804,8 +819,10 @@ export default function DashboardPage() {
                 {rows.map((r: any) => {
                   const id = String(r._id);
                   const isSelected = selectedIds.has(id);
+                  const apiStatus = (r.status ?? '').toString();
+
                   return (
-                    <tr key={id} style={{ borderTop:'1px solid #2223', verticalAlign:'top', background: isSelected ? 'rgba(59,130,246,0.08)' : 'transparent' }}>
+                    <tr key={id} style={{ borderTop:'1px solid #2223', verticalAlign:'top', background: isSelected ? 'rgba(109,94,252,0.06)' : 'transparent' }}>
                       <td style={{ padding:'8px' }}>
                         <div style={{ display:'flex', alignItems:'center', justifyContent:'center' }}>
                           <input
@@ -820,8 +837,17 @@ export default function DashboardPage() {
                       <td style={{ padding:'8px' }}>{r.smv_order_id || ''}</td>
                       <td style={{ padding:'8px', fontWeight:600 }}>{r.passport_number || ''}</td>
                       <td style={{ padding:'8px' }}>{r.type || ''}</td>
-                      <td style={{ padding:'8px' }}>{r.status ?? '—'}</td>
-                      <td style={{ padding:'8px' }}>{displayLogisticsStatus(r)}</td>
+
+                      {/* API status pill */}
+                      <td style={{ padding:'8px' }}>
+                        <StatusPill kind={apiStatusKind(apiStatus)}>{apiStatus || '—'}</StatusPill>
+                      </td>
+
+                      {/* Logistics status pill */}
+                      <td style={{ padding:'8px' }}>
+                        <StatusPill kind={logisticsKind(r)}>{displayLogisticsStatus(r)}</StatusPill>
+                      </td>
+
                       <td style={{ padding:'8px' }}>{r.assigned_for || ''}</td>
                       <td style={{ padding:'8px' }}>{fmtDateTime(r.appointment_date)}</td>
                       <td style={{ padding:'8px' }}>{fmtDateOnly(r.travel_end_date)}</td>
@@ -845,6 +871,6 @@ export default function DashboardPage() {
           </details>
         )}
       </section>
-    </main>
+    </Shell>
   );
 }
