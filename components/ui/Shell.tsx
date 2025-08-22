@@ -40,7 +40,7 @@ export default function Shell({
       <aside className="app-sidebar">
         <div className="brand">
           <span className="material-symbols-outlined">widgets</span>
-          <span>NUCLEUS</span>
+          <span>Logistics Console</span>
         </div>
         <nav className="nav">
           <Link className={active === 'dashboard' ? 'active' : ''} href="#">
