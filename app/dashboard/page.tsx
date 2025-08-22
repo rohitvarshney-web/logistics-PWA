@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import Shell, { StatusPill } from '@/components/ui/Shell';
+import Shell, { StatusPill } from '../../components/ui/Shell';
 
 type LoadingKind = 'passport' | 'order' | 'bulk' | null;
 
