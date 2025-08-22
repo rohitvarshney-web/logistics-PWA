@@ -7,24 +7,28 @@ import { useEffect, useState } from 'react';
 export default function Shell({
   title,
   active,
-  children,
   rightActions,
+  children,
 }: {
   title: string;
   active?: 'dashboard' | 'orders' | 'tasks' | 'reports';
   rightActions?: React.ReactNode;
   children: React.ReactNode;
 }) {
-  const [now, setNow] = useState<string>('');
+  const [now, setNow] = useState('');
 
   useEffect(() => {
     const tick = () => {
       const d = new Date();
-      const fmt = new Intl.DateTimeFormat(undefined, {
-        weekday: 'short', month: 'short', day: '2-digit',
-        hour: '2-digit', minute: '2-digit'
-      }).format(d);
-      setNow(fmt);
+      setNow(
+        new Intl.DateTimeFormat(undefined, {
+          weekday: 'short',
+          month: 'short',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+        }).format(d)
+      );
     };
     tick();
     const id = setInterval(tick, 15_000);
@@ -33,7 +37,6 @@ export default function Shell({
 
   return (
     <div className="app-shell">
-      {/* left rail */}
       <aside className="app-sidebar">
         <div className="brand">
           <span className="material-symbols-outlined">widgets</span>
@@ -59,7 +62,6 @@ export default function Shell({
         </nav>
       </aside>
 
-      {/* content */}
       <section className="app-main">
         <div className="topbar">
           <div className="title">
@@ -80,7 +82,12 @@ export default function Shell({
   );
 }
 
-/* small helpers to render status chips if you want to reuse them */
-export function StatusPill({ kind, children }: { kind: 'green'|'orange'|'blue'|'purple'|'gray'; children: React.ReactNode }) {
+export function StatusPill({
+  kind,
+  children,
+}: {
+  kind: 'green' | 'orange' | 'blue' | 'purple' | 'gray';
+  children: React.ReactNode;
+}) {
   return <span className={`pill pill--${kind}`}>{children}</span>;
 }
