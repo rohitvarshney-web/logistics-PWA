@@ -168,6 +168,7 @@ export default function DashboardPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
+        cache: 'no-store',
         body: JSON.stringify(body),
       });
       if (r.status === 401) { await hardLogout(true); return { ok: false, reason: 'unauthorized' }; }
@@ -303,6 +304,45 @@ export default function DashboardPage() {
       return next;
     });
   }
+  async function persistSelectedStatus() {
+  // Persist selected IDs with their localStatus to server
+  const ids = Array.from(selectedIds);
+  if (ids.length === 0) return;
+  setLoading('bulk');
+  try {
+    const tasks = ids
+      .map(id => ({ id, status: localStatus.get(id) }))
+      .filter(x => x.status && x.id);
+
+    if (tasks.length === 0) { setLoading(null); return; }
+
+    const results = await Promise.allSettled(tasks.map(t =>
+      fetch('/api/smv/status-update', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        body: JSON.stringify({ orderId: t.id, status: t.status })
+      })
+    ));
+
+    const failures = results.filter(r => r.status === 'rejected' || (r.status==='fulfilled' && !r.value.ok));
+    if (failures.length > 0) {
+      setError(`${failures.length} update(s) failed. Try again or check auth.`);
+    } else {
+      setError(null);
+    }
+
+    // Refetch current page
+    const res = await callSearch(optionalBody, null);
+    if (res.ok) setResult(res);
+  } catch (e) {
+    setError(String(e));
+  } finally {
+    setLoading(null);
+  }
+}
+
   function resetToPrevious() {
     const last = lastChangeRef.current;
     if (!last) return;
@@ -758,7 +798,7 @@ export default function DashboardPage() {
                  onChange={(e)=>setSkip(Math.max(0, Number(e.target.value) || 0))} />
 
           <button className="btn" onClick={() => setSkip((s) => Math.max(0, s - limit))} disabled={skip === 0}>◀ Prev</button>
-          <button className="btn" onClick={() => setSkip((s) => s + limit)} disabled={rows.length < limit}>Next ▶</button>
+          <button className="btn" onClick={() => setSkip((s) => s + limit)} disabled={(total && (skip + limit) >= total) || (!total && rows.length < limit)}>Next ▶</button>
 
           <span className="label" style={{ marginLeft: 8 }}>
             {total ? `Showing ${showingFrom}-${showingTo} of ${total}` : rows.length ? `Showing ${rows.length}` : 'No results yet'}
