@@ -59,7 +59,7 @@ function AddressCell({ label, text, maxWidth = 280 }: { label: string; text?: st
             <div
               style={{
                 whiteSpace: 'pre-wrap',
-                wordBreak: 'word-break',
+                wordBreak: 'break-word',
                 marginTop: 6,
                 padding: 8,
                 border: '1px solid #0001',
