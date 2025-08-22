@@ -763,7 +763,7 @@ export default function DashboardPage() {
               <label className="label">Passport Number</label>
               <input
                 className="input"
-                placeholder="e.g. A0000000"
+                placeholder="e.g. W1184034"
                 value={passport}
                 onChange={(e) => setPassport(e.target.value)}
                 onKeyDown={onPassportKey}
@@ -776,12 +776,12 @@ export default function DashboardPage() {
 
           <div style={{ height: 12 }} />
 
-         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'end' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'end' }}>
             <div>
               <label className="label">Order ID</label>
               <input
                 className="input"
-                placeholder="e.g. SMV-ABC-00000"
+                placeholder="e.g. SMV-SGP-07907"
                 value={orderId}
                 onChange={(e) => setOrderId(e.target.value)}
                 onKeyDown={onOrderKey}
@@ -790,7 +790,7 @@ export default function DashboardPage() {
             <button className="btn" onClick={searchByOrder} disabled={!orderId.trim() || loading === 'order'}>
               {loading === 'order' ? 'Searching…' : 'Search Order'}
             </button>
-          </div> 
+          </div>
         </section>
 
         {/* filters + pagination */}
