@@ -45,7 +45,7 @@ export default function Shell({
         <nav className="nav">
           <Link className={active === 'dashboard' ? 'active' : ''} href="#">
             <span className="material-symbols-outlined">dashboard</span>
-            <span className="label">Logistics Console</span>
+            <span className="label">Home</span>
           </Link>
           <Link className={active === 'orders' ? 'active' : ''} href="#">
             <span className="material-symbols-outlined">local_shipping</span>
