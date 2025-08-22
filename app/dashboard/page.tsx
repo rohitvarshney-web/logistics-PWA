@@ -218,11 +218,26 @@ export default function DashboardPage() {
   }
   async function logout() { await hardLogout(false); }
 
-  /* data extraction (single/bulk combined) */
-  const rows: any[] = result?.result?.data?.data || result?.rows || [];
-  const total: number = result?.result?.data?.count ?? (Array.isArray(rows) ? rows.length : 0);
-  const showingFrom = rows.length ? skip + 1 : 0;
-  const showingTo   = rows.length ? skip + rows.length : 0;
+ /* data extraction (single/bulk combined) */
+const rows: any[] = result?.result?.data?.data || result?.rows || [];
+const total: number = result?.result?.data?.count ?? (Array.isArray(rows) ? rows.length : 0);
+
+/**
+ * Some upstream responses ignore limit/skip and return the full set.
+ * To keep UX correct, we always slice on the client if we detect more
+ * than `limit` rows were returned.
+ */
+const pageRows = useMemo(() => {
+  if (!Array.isArray(rows)) return [];
+  // If server already paginated, rows.length <= limit — just use rows.
+  // If server returned the whole set (rows.length > limit), slice client-side.
+  if (rows.length > limit) return rows.slice(skip, skip + limit);
+  return rows;
+}, [rows, limit, skip]);
+
+const showingFrom = pageRows.length ? skip + 1 : 0;
+const showingTo   = pageRows.length ? skip + pageRows.length : 0;
+
 
   /* quick lookup for page */
   const rowById = useMemo(() => {
