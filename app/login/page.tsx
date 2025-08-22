@@ -126,7 +126,6 @@ export default function LoginPage() {
       ) : (
         <form onSubmit={verifyOtp} className="card">
           <p className="label">OTP sent to {identifier}. Enter code below.</p>
-          <label className="label">OTP</label>
           <input className="input" value={otp} onChange={(e) => setOtp(e.target.value)} required />
           <div style={{ height: 12 }} />
           <button className="btn primary" type="submit">Verify &amp; Continue</button>
