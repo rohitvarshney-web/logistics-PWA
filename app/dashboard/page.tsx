@@ -59,7 +59,7 @@ function AddressCell({ label, text, maxWidth = 280 }: { label: string; text?: st
             <div
               style={{
                 whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
+                wordBreak: 'word-break',
                 marginTop: 6,
                 padding: 8,
                 border: '1px solid #0001',
@@ -78,7 +78,7 @@ function AddressCell({ label, text, maxWidth = 280 }: { label: string; text?: st
   );
 }
 
-/* bulk statuses (client-only overlay for now) */
+/* statuses */
 const BULK_STATUS_OPTIONS = [
   { value: 'DOCUMENTS_RECEIVED', label: 'Documents Received' },
   { value: 'APPLICATIONS_SUBMITTED', label: 'Applications Submitted' },
@@ -86,14 +86,10 @@ const BULK_STATUS_OPTIONS = [
   { value: 'PASSPORT_COURIERED', label: 'Passport Couriered' },
 ];
 
-/* passport detection heuristic */
 const PASSPORT_REGEX = /\b([A-Z0-9]{7,10})\b/i;
-
-/* ----- column heuristics for bulk import ----- */
 const PASSPORT_KEYS = ['passport', 'passport_number', 'passport no', 'passportno', 'pp_no', 'pp', 'ppnumber'];
 const ORDER_KEYS    = ['order', 'order_id', 'order id', 'smv_order_id', 'smv order id', 'reference', 'ref', 'ref_no'];
 
-/* ---------- component ---------- */
 export default function DashboardPage() {
   /* inputs */
   const [passport, setPassport] = useState('');
@@ -112,25 +108,26 @@ export default function DashboardPage() {
   const [autoSearch, setAutoSearch] = useState(false);
   const [loading, setLoading]       = useState<LoadingKind>(null);
   const [error, setError]           = useState<string | null>(null);
+  const [notice, setNotice]         = useState<string | null>(null);
   const [result, setResult]         = useState<any>(null);
 
   /* selection */
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const headerCheckboxRef = useRef<HTMLInputElement>(null);
 
-  /* logistics status overlay (client) + undo buffer */
+  /* logistics overlay + undo */
   const [localStatus, setLocalStatus] = useState<Map<string, string>>(new Map());
   const lastChangeRef = useRef<{ prev: Map<string, string | undefined>, ids: Set<string> } | null>(null);
   const [bulkStatus, setBulkStatus]   = useState<string>('');
 
-  /* scan/upload UI (single image) */
+  /* scan/upload (single) */
   const [scanOpen, setScanOpen]       = useState(false);
   const [scanBusy, setScanBusy]       = useState(false);
   const [scanFile, setScanFile]       = useState<File | null>(null);
   const [scanPreview, setScanPreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  /* BULK file UI (csv/xlsx) */
+  /* bulk (csv/xlsx) */
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkFile, setBulkFile] = useState<File | null>(null);
   const [bulkHeaders, setBulkHeaders] = useState<string[]>([]);
@@ -160,7 +157,7 @@ export default function DashboardPage() {
   }, [dLimit, dSkip, dStatusCsv, dTypeCsv, dCurrentTask]);
 
   async function callSearch(body: Record<string, any>, kind: LoadingKind) {
-    setLoading(kind); if (kind !== 'bulk') { setError(null); setResult(null); }
+    setLoading(kind); if (kind !== 'bulk') { setError(null); setNotice(null); setResult(null); }
     try {
       const r = await fetch('/api/smv/search', {
         method: 'POST',
@@ -186,7 +183,7 @@ export default function DashboardPage() {
   function searchByPassport() { const s = passport.trim(); if (!s) return; return callSearch({ passport: s, ...optionalBody }, 'passport'); }
   function searchByOrder()    { const s = orderId.trim();  if (!s) return; return callSearch({ orderId: s,  ...optionalBody }, 'order'); }
 
-  /* enter to search */
+  /* key handlers */
   function onPassportKey(e: React.KeyboardEvent<HTMLInputElement>) { if (e.key === 'Enter') searchByPassport(); }
   function onOrderKey(e: React.KeyboardEvent<HTMLInputElement>)    { if (e.key === 'Enter') searchByOrder(); }
 
@@ -215,20 +212,19 @@ export default function DashboardPage() {
   }
   async function logout() { await hardLogout(false); }
 
-  /* data extraction (single/bulk combined) */
-  const rows: any[] = result?.result?.data?.data || result?.rows || []; // allow bulk to inject `rows`
+  /* data */
+  const rows: any[] = result?.result?.data?.data || result?.rows || [];
   const total: number = result?.result?.data?.count ?? (Array.isArray(rows) ? rows.length : 0);
   const showingFrom = rows.length ? skip + 1 : 0;
   const showingTo   = rows.length ? skip + rows.length : 0;
 
-  /* quick lookup for page */
   const rowById = useMemo(() => {
     const m = new Map<string, any>();
     rows.forEach(r => m.set(String(r._id), r));
     return m;
   }, [rows]);
 
-  /* selection helpers */
+  /* selection */
   const visibleIds = rows.map(r => String(r._id));
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedIds.has(id));
   const someVisibleSelected = visibleIds.some(id => selectedIds.has(id)) && !allVisibleSelected;
@@ -250,7 +246,7 @@ export default function DashboardPage() {
   }
   function clearSelection() { setSelectedIds(new Set()); }
 
-  /* logistics status overlay + undo */
+  /* logistics overlay + undo + PERSIST */
   function humanize(s: string): string {
     if (!s) return '—';
     const map: Record<string,string> = {
@@ -269,21 +265,69 @@ export default function DashboardPage() {
     return humanize(row.logistics_status || '');
   }
 
-  function applyBulkStatus() {
+  async function applyBulkStatus() {
     if (!bulkStatus || selectedIds.size === 0) return;
+    const idsArr = Array.from(selectedIds);
+
+    // capture previous for undo/rollback
     const prev = new Map<string, string | undefined>();
-    selectedIds.forEach(id => {
+    idsArr.forEach(id => {
       const curLocal = localStatus.get(id);
       const backend  = rowById.get(id)?.logistics_status;
       prev.set(id, curLocal !== undefined ? curLocal : backend);
     });
     lastChangeRef.current = { prev, ids: new Set(selectedIds) };
+
+    // optimistic UI
     setLocalStatus(prevMap => {
       const next = new Map(prevMap);
-      selectedIds.forEach(id => next.set(id, bulkStatus));
+      idsArr.forEach(id => next.set(id, bulkStatus));
       return next;
     });
+    setError(null); setNotice(null);
+
+    try {
+      const r = await fetch('/api/smv/logistics/bulk-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ ids: idsArr, status: bulkStatus }),
+      });
+      const js = await r.json().catch(() => ({}));
+
+      if (!r.ok) {
+        // rollback
+        setLocalStatus(prevMap => {
+          const next = new Map(prevMap);
+          idsArr.forEach(id => {
+            const p = prev.get(id);
+            if (p === undefined || p === null || p === '') next.delete(id);
+            else next.set(id, p);
+          });
+          return next;
+        });
+        setError(js?.error || js?.upstreamBody?.message || `Bulk update failed (${js?.upstreamStatus || r.status})`);
+        return;
+      }
+
+      const count = Array.isArray(js?.updated) ? js.updated.length : idsArr.length;
+      setNotice(`Logistics status updated for ${count} item${count === 1 ? '' : 's'}.`);
+      // (Optional) refresh current page from server to reflect backend value; keeping optimistic for speed.
+    } catch (e: any) {
+      // rollback on network failure
+      setLocalStatus(prevMap => {
+        const next = new Map(prevMap);
+        idsArr.forEach(id => {
+          const p = prev.get(id);
+          if (p === undefined || p === null || p === '') next.delete(id);
+          else next.set(id, p);
+        });
+        return next;
+      });
+      setError(`Network error while bulk updating: ${String(e)}`);
+    }
   }
+
   function resetToPrevious() {
     const last = lastChangeRef.current;
     if (!last) return;
@@ -357,9 +401,7 @@ export default function DashboardPage() {
     setBulkPassportCol(''); setBulkOrderCol('');
     setBulkProgress({ done: 0, total: 0, running: 0, failed: 0 }); setBulkFailures([]);
   }
-  function closeBulk() {
-    setBulkOpen(false);
-  }
+  function closeBulk() { setBulkOpen(false); }
   function onBulkFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0] || null;
     if (!f) return;
@@ -368,12 +410,10 @@ export default function DashboardPage() {
   }
 
   function simpleParseCsv(text: string): { headers: string[]; rows: Record<string, any>[] } {
-    // very simple CSV (handles quoted fields and commas)
     const lines = text.replace(/\r/g, '').split('\n').filter(Boolean);
-    if (lines.length === 0) return { headers: [], rows: [] };
+    if (!lines.length) return { headers: [], rows: [] };
     const parseLine = (ln: string) => {
-      const out: string[] = [];
-      let cur = '', inQ = false;
+      const out: string[] = []; let cur = '', inQ = false;
       for (let i = 0; i < ln.length; i++) {
         const ch = ln[i];
         if (inQ) {
@@ -399,22 +439,25 @@ export default function DashboardPage() {
     return { headers, rows };
   }
 
+  async function importXlsxIfAvailable(): Promise<unknown | null> {
+    try {
+      const dynamicImport = new Function('m', 'return import(m)');
+      // @ts-ignore
+      const mod = await (dynamicImport)('xlsx');
+      return mod;
+    } catch { return null; }
+  }
+
   async function parseBulkFile(file: File) {
     try {
-      // CSV quick path
       if (file.name.toLowerCase().endsWith('.csv')) {
         const txt = await file.text();
         const { headers, rows } = simpleParseCsv(txt);
         applyBulkParsed(headers, rows);
         return;
       }
-
-      // XLSX path (dynamic import to avoid bundling if unused)
       const okXlsx = await importXlsxIfAvailable();
-      if (!okXlsx) {
-        setError('XLSX parsing requires the "xlsx" package. Run: npm i xlsx');
-        return;
-      }
+      if (!okXlsx) { setError('XLSX parsing requires the "xlsx" package. Either upload a CSV or run: npm i xlsx@^0.18.5'); return; }
       const XLSX = okXlsx as any;
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: 'array' });
@@ -428,84 +471,45 @@ export default function DashboardPage() {
     }
   }
 
-  async function importXlsxIfAvailable(): Promise<unknown | null> {
-    try {
-      // @ts-ignore
-      const mod = await import('xlsx');
-      return mod;
-    } catch {
-      return null;
-    }
-  }
-
   function applyBulkParsed(headers: string[], rows: Record<string, any>[]) {
     setBulkHeaders(headers);
     setBulkRows(rows);
-
-    // auto-detect columns
     const lower = headers.map(h => h.toLowerCase());
     const findIn = (keys: string[]) => {
-      for (const k of keys) {
-        const idx = lower.indexOf(k);
-        if (idx >= 0) return headers[idx];
-      }
+      for (const k of keys) { const idx = lower.indexOf(k); if (idx >= 0) return headers[idx]; }
       return '';
     };
-    const pcol = findIn(PASSPORT_KEYS);
-    const ocol = findIn(ORDER_KEYS);
-    setBulkPassportCol(pcol);
-    setBulkOrderCol(ocol);
+    setBulkPassportCol(findIn(PASSPORT_KEYS));
+    setBulkOrderCol(findIn(ORDER_KEYS));
   }
 
   function deriveBulkJobs(): Array<{ passport?: string; orderId?: string; raw: any }> {
     const jobs: Array<{ passport?: string; orderId?: string; raw: any }> = [];
     const seen = new Set<string>();
-
     for (const r of bulkRows) {
       const p = String((bulkPassportCol ? r[bulkPassportCol] : '') || '').trim();
       const o = String((bulkOrderCol ? r[bulkOrderCol] : '') || '').trim();
-
       if (!p && !o) continue;
-
-      let key = '';
-      if (p) key = `P:${p.toUpperCase()}`;
-      else key = `O:${o.toUpperCase()}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-
-      const job: any = { raw: r };
-      if (p) job.passport = p.toUpperCase();
-      if (o) job.orderId  = o.toUpperCase();
-      jobs.push(job);
+      const key = p ? `P:${p.toUpperCase()}` : `O:${o.toUpperCase()}`;
+      if (seen.has(key)) continue; seen.add(key);
+      jobs.push({ raw: r, ...(p ? { passport: p.toUpperCase() } : {}), ...(o ? { orderId: o.toUpperCase() } : {}) });
     }
     return jobs;
   }
 
   async function runBulkSearch() {
     const jobs = deriveBulkJobs();
-    if (jobs.length === 0) { setError('No valid rows found. Choose the correct columns or check your file.'); return; }
-
-    setLoading('bulk');
-    setError(null);
-    setBulkFailures([]);
-    setBulkProgress({ done: 0, total: jobs.length, running: 0, failed: 0 });
-
-    const concurrency = 4;
-    let index = 0;
-    const outRows: any[] = [];
-
+    if (!jobs.length) { setError('No valid rows found. Choose the correct columns or check your file.'); return; }
+    setLoading('bulk'); setError(null); setNotice(null);
+    setBulkFailures([]); setBulkProgress({ done: 0, total: jobs.length, running: 0, failed: 0 });
+    const concurrency = 4; let index = 0; const outRows: any[] = [];
     async function worker() {
       while (true) {
-        const i = index++;
-        if (i >= jobs.length) return;
-        const job = jobs[i];
-
-        setBulkProgress(p => ({ ...p, running: p.running + 1 }));
+        const i = index++; if (i >= jobs.length) return;
+        const job = jobs[i]; setBulkProgress(p => ({ ...p, running: p.running + 1 }));
         const body = job.passport ? { passport: job.passport, ...optionalBody } : { orderId: job.orderId, ...optionalBody };
         const res = await callSearch(body, 'bulk');
-
         if (res?.ok) {
-          // normalize to array of rows
           const rows: any[] = res.data?.result?.data?.data || [];
           if (Array.isArray(rows) && rows.length > 0) outRows.push(...rows);
           else setBulkFailures(f => [...f, { input: job.passport || job.orderId || 'UNKNOWN', reason: 'No matching rows' }]);
@@ -515,25 +519,20 @@ export default function DashboardPage() {
         setBulkProgress(p => ({ ...p, running: p.running - 1, done: p.done + 1, failed: res?.ok ? p.failed : p.failed + 1 }));
       }
     }
-
     const workers = Array.from({ length: concurrency }, () => worker());
     await Promise.all(workers);
-
     setLoading(null);
-
-    // Merge/replace current table with bulk results
     setResult({ rows: outRows });
     setSelectedIds(new Set());
   }
 
   function downloadFailuresCsv() {
-    if (bulkFailures.length === 0) return;
+    if (!bulkFailures.length) return;
     const header = 'input,reason\n';
     const body = bulkFailures.map(r => `${csvEscape(r.input)},${csvEscape(r.reason)}`).join('\n');
     const blob = new Blob([header + body], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'bulk-failures.csv'; a.click();
+    const a = document.createElement('a'); a.href = url; a.download = 'bulk-failures.csv'; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
 
@@ -543,8 +542,8 @@ export default function DashboardPage() {
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
         <h1>SMV Logistics Console</h1>
         <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-          <button className="btn" onClick={openBulk}>📑 Bulk Search</button>
-          <button className="btn" onClick={openScan}>📷 Scan / Upload</button>
+          <button className="btn" onClick={() => setBulkOpen(true)}>📑 Bulk Search</button>
+          <button className="btn" onClick={() => setScanOpen(true)}>📷 Scan / Upload</button>
           <label className="label" style={{ display:'flex', alignItems:'center', gap:6 }}>
             <input type="checkbox" checked={autoSearch} onChange={(e) => setAutoSearch(e.target.checked)} />
             Auto-search
@@ -553,12 +552,16 @@ export default function DashboardPage() {
         </div>
       </header>
 
+      {/* banners */}
+      {notice && <p className="label" style={{ marginTop: 8, color:'#10b981' }}>{notice}</p>}
+      {error &&  <p className="label" style={{ marginTop: 8, color:'#fca5a5' }}>{error}</p>}
+
       {/* Bulk search panel */}
       {bulkOpen && (
         <section className="card" style={{ marginTop: 12 }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
             <h3 className="label">Bulk Search (CSV / XLSX)</h3>
-            <button className="btn" onClick={closeBulk}>Close</button>
+            <button className="btn" onClick={() => setBulkOpen(false)}>Close</button>
           </div>
 
           <div style={{ display:'grid', gridTemplateColumns: '1fr auto', gap: 12, alignItems:'end', marginTop: 8 }}>
@@ -598,7 +601,6 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {/* Progress */}
           {(loading === 'bulk' || bulkProgress.total > 0) && (
             <div style={{ marginTop: 12 }}>
               <div className="label" style={{ marginBottom: 6 }}>
@@ -616,7 +618,6 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {/* Failures preview */}
           {bulkFailures.length > 0 && (
             <details style={{ marginTop: 12 }}>
               <summary className="label">Show failures</summary>
@@ -631,12 +632,12 @@ export default function DashboardPage() {
         </section>
       )}
 
-      {/* Scan / Upload drawer (single image) */}
+      {/* Scan / Upload drawer */}
       {scanOpen && (
         <section className="card" style={{ marginTop: 12 }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
             <h3 className="label">Scan / Upload Passport</h3>
-            <button className="btn" onClick={closeScan}>Close</button>
+            <button className="btn" onClick={() => setScanOpen(false)}>Close</button>
           </div>
 
           <p className="label" style={{ marginTop: 8 }}>
@@ -650,7 +651,7 @@ export default function DashboardPage() {
                 type="file"
                 accept="image/*,application/pdf"
                 capture="environment"
-                onChange={onPickFile}
+                onChange={(e) => { const f = e.target.files?.[0] || null; setScanFile(f); setScanPreview(f ? URL.createObjectURL(f) : null); }}
               />
               <div className="label" style={{ marginTop: 8, opacity: 0.8 }}>
                 Tip: On mobile, this opens the camera for a fresh capture.
@@ -676,7 +677,7 @@ export default function DashboardPage() {
         </section>
       )}
 
-      {/* search (single) */}
+      {/* single search */}
       <section className="card" style={{ marginTop: 16 }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'end' }}>
           <div>
@@ -768,8 +769,6 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {error && <p className="label" style={{ color:'#fca5a5', marginTop: 8 }}>{error}</p>}
-
         {rows && rows.length > 0 && (
           <div style={{ overflowX: 'auto', marginTop: 12 }}>
             <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -789,9 +788,7 @@ export default function DashboardPage() {
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>SMV Order</th>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Passport</th>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Type</th>
-                  {/* API status preserved as-is */}
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Status</th>
-                  {/* Separate logistics status */}
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Logistics Status</th>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Assigned For</th>
                   <th className="label" style={{ textAlign:'left', padding:'8px' }}>Appointment</th>
