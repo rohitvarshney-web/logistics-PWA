@@ -106,14 +106,13 @@ export default function LoginPage() {
   return (
     <main className="container" style={{ maxWidth: 520 }}>
       <h1>Log in</h1>
-      <p className="label">Enter your email or phone to receive an OTP.</p>
 
       {!otpSent ? (
         <form onSubmit={sendOtp} className="card">
-          <label className="label">Email or Phone</label>
+          <label className="label">Enter your email to receive an OTP.</label>
           <input
             className="input"
-            placeholder="you@company.com or +91..."
+            placeholder="username@stampmyvisa.com"
             value={identifier}
             onChange={(e) => setIdentifier(e.target.value)}
             required
@@ -126,7 +125,6 @@ export default function LoginPage() {
       ) : (
         <form onSubmit={verifyOtp} className="card">
           <p className="label">OTP sent to {identifier}. Enter code below.</p>
-          <label className="label">OTP</label>
           <input className="input" value={otp} onChange={(e) => setOtp(e.target.value)} required />
           <div style={{ height: 12 }} />
           <button className="btn primary" type="submit">Verify &amp; Continue</button>
