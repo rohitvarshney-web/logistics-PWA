@@ -80,7 +80,7 @@ function AddressCell({ label, text, maxWidth = 280 }: { label: string; text?: st
   );
 }
 
-/* bulk statuses (client-only overlay for now) */
+/* bulk statuses */
 const BULK_STATUS_OPTIONS = [
   { value: 'DOCUMENTS_RECEIVED', label: 'Documents Received' },
   { value: 'APPLICATIONS_SUBMITTED', label: 'Applications Submitted' },
@@ -223,9 +223,7 @@ export default function DashboardPage() {
   const total: number = result?.result?.data?.count ?? (Array.isArray(rows) ? rows.length : 0);
 
   /**
-   * Some upstream responses ignore limit/skip and return the full set.
-   * To keep UX correct, we always slice on the client if we detect more
-   * than `limit` rows were returned.
+   * Upstream can return full set (ignoring limit/skip). Ensure correct paging in UI.
    */
   const pageRows = useMemo(() => {
     if (!Array.isArray(rows)) return [];
@@ -301,24 +299,8 @@ export default function DashboardPage() {
     return 'blue';
   }
 
-  function applyBulkStatus() {
-    if (!bulkStatus || selectedIds.size === 0) return;
-    const prev = new Map<string, string | undefined>();
-    selectedIds.forEach(id => {
-      const curLocal = localStatus.get(id);
-      const backend  = rowById.get(id)?.logistics_status;
-      prev.set(id, curLocal !== undefined ? curLocal : backend);
-    });
-    lastChangeRef.current = { prev, ids: new Set(selectedIds) };
-    setLocalStatus(prevMap => {
-      const next = new Map(prevMap);
-      selectedIds.forEach(id => next.set(id, bulkStatus));
-      return next;
-    });
-  }
-
+  // ONE-STEP FLOW: apply local + persist
   async function persistSelectedStatus() {
-    // Persist selected IDs with their localStatus to server
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
     setLoading('bulk');
@@ -354,6 +336,27 @@ export default function DashboardPage() {
     } finally {
       setLoading(null);
     }
+  }
+
+  async function applyBulkStatus() {
+    if (!bulkStatus || selectedIds.size === 0) return;
+    const prev = new Map<string, string | undefined>();
+    selectedIds.forEach(id => {
+      const curLocal = localStatus.get(id);
+      const backend  = rowById.get(id)?.logistics_status;
+      prev.set(id, curLocal !== undefined ? curLocal : backend);
+    });
+    lastChangeRef.current = { prev, ids: new Set(selectedIds) };
+
+    // optimistic local update
+    setLocalStatus(prevMap => {
+      const next = new Map(prevMap);
+      selectedIds.forEach(id => next.set(id, bulkStatus));
+      return next;
+    });
+
+    // immediately persist (one-step)
+    await persistSelectedStatus();
   }
 
   function resetToPrevious() {
@@ -631,7 +634,7 @@ export default function DashboardPage() {
             <button className="btn" onClick={closeBulk}>Close</button>
           </div>
 
-          <div style={{ display:'grid', gridTemplateColumns: '1fr auto', gap: 12, alignItems:'end', marginTop: 8 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap: 12, alignItems:'end', marginTop: 8 }}>
             <div>
               <label className="label">Upload file</label>
               <input type="file" accept=".csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx" onChange={onBulkFile} />
@@ -744,86 +747,97 @@ export default function DashboardPage() {
         </section>
       )}
 
-      {/* search (single) */}
-      <section className="card" style={{ marginTop: 16 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'end' }}>
-          <div>
-            <label className="label">Passport Number</label>
-            <input
-              className="input"
-              placeholder="e.g. W1184034"
-              value={passport}
-              onChange={(e) => setPassport(e.target.value)}
-              onKeyDown={onPassportKey}
-            />
+      {/* === Two-column grid: Search (left) + Filters/Pagination (right) === */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))',
+          gap: 16,
+          marginTop: 16,
+        }}
+      >
+        {/* search (single) */}
+        <section className="card">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'end' }}>
+            <div>
+              <label className="label">Passport Number</label>
+              <input
+                className="input"
+                placeholder="e.g. W1184034"
+                value={passport}
+                onChange={(e) => setPassport(e.target.value)}
+                onKeyDown={onPassportKey}
+              />
+            </div>
+            <button className="btn primary" onClick={searchByPassport} disabled={!passport.trim() || loading === 'passport'}>
+              {loading === 'passport' ? 'Searching…' : 'Search Passport'}
+            </button>
           </div>
-          <button className="btn primary" onClick={searchByPassport} disabled={!passport.trim() || loading === 'passport'}>
-            {loading === 'passport' ? 'Searching…' : 'Search Passport'}
-          </button>
-        </div>
 
-        <div style={{ height: 12 }} />
+          <div style={{ height: 12 }} />
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'end' }}>
-          <div>
-            <label className="label">Order ID</label>
-            <input
-              className="input"
-              placeholder="e.g. SMV-SGP-07907"
-              value={orderId}
-              onChange={(e) => setOrderId(e.target.value)}
-              onKeyDown={onOrderKey}
-            />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'end' }}>
+            <div>
+              <label className="label">Order ID</label>
+              <input
+                className="input"
+                placeholder="e.g. SMV-SGP-07907"
+                value={orderId}
+                onChange={(e) => setOrderId(e.target.value)}
+                onKeyDown={onOrderKey}
+              />
+            </div>
+            <button className="btn" onClick={searchByOrder} disabled={!orderId.trim() || loading === 'order'}>
+              {loading === 'order' ? 'Searching…' : 'Search Order'}
+            </button>
           </div>
-          <button className="btn" onClick={searchByOrder} disabled={!orderId.trim() || loading === 'order'}>
-            {loading === 'order' ? 'Searching…' : 'Search Order'}
-          </button>
-        </div>
-      </section>
+        </section>
 
-      {/* filters + pagination */}
-      <section className="card" style={{ marginTop: 16 }}>
-        <h3 className="label">Filters (optional)</h3>
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
-          <div>
-            <label className="label">Status (CSV)</label>
-            <input className="input" placeholder="e.g. UNASSIGNED,PENDING" value={statusCsv} onChange={(e)=>setStatusCsv(e.target.value)} />
+        {/* filters + pagination */}
+        <section className="card">
+          <h3 className="label">Filters (optional)</h3>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+            <div>
+              <label className="label">Status (CSV)</label>
+              <input className="input" placeholder="e.g. UNASSIGNED,PENDING" value={statusCsv} onChange={(e)=>setStatusCsv(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Type (CSV)</label>
+              <input className="input" placeholder="e.g. SUBMISSION,PICKUP" value={typeCsv} onChange={(e)=>setTypeCsv(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Current Task</label>
+              <input className="input" placeholder="leave empty to omit" value={currentTask} onChange={(e)=>setCurrentTask(e.target.value)} />
+            </div>
           </div>
-          <div>
-            <label className="label">Type (CSV)</label>
-            <input className="input" placeholder="e.g. SUBMISSION,PICKUP" value={typeCsv} onChange={(e)=>setTypeCsv(e.target.value)} />
+
+          <div style={{ height: 12 }} />
+
+          <h3 className="label">Pagination</h3>
+          <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+            <label className="label">Limit</label>
+            <input className="input" style={{ width: 90 }} type="number" min={1} value={limit}
+                  onChange={(e)=>setLimit(Math.max(1, Number(e.target.value) || 10))} />
+            <label className="label">Skip</label>
+            <input className="input" style={{ width: 120 }} type="number" min={0} value={skip}
+                  onChange={(e)=>setSkip(Math.max(0, Number(e.target.value) || 0))} />
+
+            <button className="btn" onClick={() => setSkip((s) => Math.max(0, s - limit))} disabled={skip === 0}>◀ Prev</button>
+            <button
+              className="btn"
+              onClick={() => setSkip((s) => s + limit)}
+              disabled={(total && (skip + limit) >= total) || (!total && rows.length < limit)}
+            >
+              Next ▶
+            </button>
+
+            <span className="label" style={{ marginLeft: 8 }}>
+              {total ? `Showing ${showingFrom}-${showingTo} of ${total}` : rows.length ? `Showing ${rows.length}` : 'No results yet'}
+            </span>
           </div>
-          <div>
-            <label className="label">Current Task</label>
-            <input className="input" placeholder="leave empty to omit" value={currentTask} onChange={(e)=>setCurrentTask(e.target.value)} />
-          </div>
-        </div>
-
-        <div style={{ height: 12 }} />
-
-        <h3 className="label">Pagination</h3>
-        <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
-          <label className="label">Limit</label>
-          <input className="input" style={{ width: 90 }} type="number" min={1} value={limit}
-                 onChange={(e)=>setLimit(Math.max(1, Number(e.target.value) || 10))} />
-          <label className="label">Skip</label>
-          <input className="input" style={{ width: 120 }} type="number" min={0} value={skip}
-                 onChange={(e)=>setSkip(Math.max(0, Number(e.target.value) || 0))} />
-
-          <button className="btn" onClick={() => setSkip((s) => Math.max(0, s - limit))} disabled={skip === 0}>◀ Prev</button>
-          <button
-            className="btn"
-            onClick={() => setSkip((s) => s + limit)}
-            disabled={(total && (skip + limit) >= total) || (!total && rows.length < limit)}
-          >
-            Next ▶
-          </button>
-
-          <span className="label" style={{ marginLeft: 8 }}>
-            {total ? `Showing ${showingFrom}-${showingTo} of ${total}` : rows.length ? `Showing ${rows.length}` : 'No results yet'}
-          </span>
-        </div>
-      </section>
+        </section>
+      </div>
+      {/* === /Two-column grid === */}
 
       {/* results + bulk toolbar */}
       <section className="card" style={{ marginTop: 24 }}>
@@ -833,12 +847,13 @@ export default function DashboardPage() {
           <div style={{ display:'flex', alignItems:'center', gap:8 }}>
             <span className="label">{selectedIds.size} selected</span>
             <select className="input" style={{ width: 260 }} value={bulkStatus} onChange={e=>setBulkStatus(e.target.value)}>
-              <option value="">Update logistics status…</option>
+              <option value="">--Select--</option>
               {BULK_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
-            <button className="btn" onClick={applyBulkStatus} disabled={!bulkStatus || selectedIds.size === 0}>Apply to selected</button>
+            <button className="btn primary" onClick={applyBulkStatus} disabled={!bulkStatus || selectedIds.size === 0}>
+              Apply to selected
+            </button>
             <button className="btn" onClick={resetToPrevious} disabled={!lastChangeRef.current}>Reset to previous</button>
-            <button className="btn" onClick={persistSelectedStatus} disabled={selectedIds.size === 0}>Save to server</button>
             {selectedIds.size > 0 && <button className="btn" onClick={clearSelection}>Clear selection</button>}
           </div>
         </div>
@@ -919,9 +934,13 @@ export default function DashboardPage() {
             </table>
           </div>
         )}
+      </section>
 
+      {/* Developer Tools (keep raw JSON here) */}
+      <section className="card" style={{ marginTop: 16 }}>
+        <h3 className="label">Developer Tools</h3>
         {result && (
-          <details style={{ marginTop: 12 }}>
+          <details style={{ marginTop: 8 }}>
             <summary className="label">Debug / Raw JSON (proxy response)</summary>
             <pre style={{ whiteSpace:'pre-wrap', fontSize:12, marginTop: 8 }}>
               {JSON.stringify(result, null, 2)}
