@@ -26,6 +26,51 @@ function fmtDateTime(x: any) {
   if (isNaN(d.getTime())) return '';
   return d.toLocaleString();
 }
+function fmtDateOnly(x: any) {
+  if (!x) return '';
+  const d = new Date(x);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleDateString();
+}
+function csvEscape(s: string) {
+  if (s == null) return '';
+  const t = String(s);
+  return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+}
+
+/* address cell with clamp + expandable details */
+function AddressCell({
+  label,
+  text,
+  maxWidth = 280,
+}: {
+  label: string;
+  text?: string;
+  maxWidth?: number;
+}) {
+  const val = (text ?? '').trim();
+  return (
+    <td className="p-2 align-top">
+      <div style={{ maxWidth }}>
+        <div
+          title={val || label}
+          className="line-clamp-2 text-sm break-words text-gray-700"
+          style={{ opacity: val ? 1 : 0.6 }}
+        >
+          {val || '—'}
+        </div>
+        {val && (
+          <details className="mt-1">
+            <summary className="cursor-pointer text-xs text-blue-600">Expand</summary>
+            <div className="mt-1 p-2 border rounded bg-gray-50 text-sm max-h-60 overflow-auto whitespace-pre-wrap">
+              {val}
+            </div>
+          </details>
+        )}
+      </div>
+    </td>
+  );
+}
 
 /* bulk statuses */
 const BULK_STATUS_OPTIONS = [
@@ -35,9 +80,16 @@ const BULK_STATUS_OPTIONS = [
   { value: 'PASSPORT_COURIERED', label: 'Passport Couriered' },
 ];
 
+/* passport detection heuristic */
+const PASSPORT_REGEX = /\b([A-Z0-9]{7,10})\b/i;
+
+/* ----- column heuristics for bulk import ----- */
+const PASSPORT_KEYS = ['passport', 'passport_number', 'passport no', 'passportno', 'pp_no', 'pp', 'ppnumber'];
+const ORDER_KEYS = ['order', 'order_id', 'order id', 'smv_order_id', 'smv order id', 'reference', 'ref', 'ref_no'];
+
 /* ---------- component ---------- */
 export default function DashboardPage() {
-  /* --- state (kept unchanged) --- */
+  /* --- state & logic (kept as-is) --- */
   const [passport, setPassport] = useState('');
   const [orderId, setOrderId] = useState('');
   const [limit, setLimit] = useState(10);
@@ -49,10 +101,37 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState<LoadingKind>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<any>(null);
+
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const headerCheckboxRef = useRef<HTMLInputElement>(null);
+  const [localStatus, setLocalStatus] = useState<Map<string, string>>(new Map());
+  const lastChangeRef = useRef<{ prev: Map<string, string | undefined>; ids: Set<string> } | null>(null);
+  const [bulkStatus, setBulkStatus] = useState<string>('');
 
-  /* --- rows, pagination --- */
+  const [scanOpen, setScanOpen] = useState(false);
+  const [scanBusy, setScanBusy] = useState(false);
+  const [scanFile, setScanFile] = useState<File | null>(null);
+  const [scanPreview, setScanPreview] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkFile, setBulkFile] = useState<File | null>(null);
+  const [bulkHeaders, setBulkHeaders] = useState<string[]>([]);
+  const [bulkRows, setBulkRows] = useState<Record<string, any>[]>([]);
+  const [bulkPassportCol, setBulkPassportCol] = useState<string>('');
+  const [bulkOrderCol, setBulkOrderCol] = useState<string>('');
+  const [bulkProgress, setBulkProgress] = useState({ done: 0, total: 0, running: 0, failed: 0 });
+  const [bulkFailures, setBulkFailures] = useState<Array<{ input: string; reason: string }>>([]);
+
+  const dPassport = useDebounced(passport, 500);
+  const dOrderId = useDebounced(orderId, 500);
+  const dLimit = useDebounced(limit, 300);
+  const dSkip = useDebounced(skip, 300);
+  const dStatusCsv = useDebounced(statusCsv, 500);
+  const dTypeCsv = useDebounced(typeCsv, 500);
+  const dCurrentTask = useDebounced(currentTask, 500);
+
+  /* data extraction */
   const rows: any[] = result?.result?.data?.data || result?.rows || [];
   const total: number = result?.result?.data?.count ?? (Array.isArray(rows) ? rows.length : 0);
   const pageRows = useMemo(() => {
@@ -61,7 +140,6 @@ export default function DashboardPage() {
     return rows;
   }, [rows, limit, skip]);
 
-  /* selection */
   const visibleIds = pageRows.map((r) => String(r._id));
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
 
@@ -82,10 +160,27 @@ export default function DashboardPage() {
     });
   }
 
-  /* ------------- UI (tailwind only, no shadcn) ------------- */
+  /* ----------------- UI ----------------- */
   return (
-    <Shell title="Logistics Console" active="dashboard">
-      {/* Top Cards */}
+    <Shell
+      title="Logistics Console"
+      active="dashboard"
+      rightActions={
+        <div className="flex items-center gap-3">
+          <button className="px-3 py-1 text-sm rounded border" onClick={() => setBulkOpen(true)}>
+            Bulk Search
+          </button>
+          <button className="px-3 py-1 text-sm rounded border" onClick={() => setScanOpen(true)}>
+            Scan / Upload
+          </button>
+          <label className="flex items-center gap-2 text-sm text-gray-600">
+            <input type="checkbox" checked={autoSearch} onChange={(e) => setAutoSearch(e.target.checked)} /> Auto-search
+          </label>
+          <button className="px-3 py-1 text-sm rounded border text-red-600">Logout</button>
+        </div>
+      }
+    >
+      {/* Top summary cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
         <div className="bg-white rounded-xl shadow p-4 border">
           <div className="flex justify-between items-start">
@@ -99,13 +194,7 @@ export default function DashboardPage() {
               Classify Documents
             </button>
           </div>
-          <div className="mt-3 text-sm text-gray-600 space-y-1">
-            <p><strong>Note from TA:</strong> Questionnaire link</p>
-            <p><strong>Remarks:</strong> Add new / View all</p>
-            <p><strong>Created By:</strong> Hardik, Jul 10 04:52 PM</p>
-          </div>
         </div>
-
         <div className="bg-white rounded-xl shadow p-4 border">
           <div className="flex justify-between items-start">
             <div>
@@ -120,69 +209,75 @@ export default function DashboardPage() {
             <p><strong>Travel Agency:</strong> ORGO.travel</p>
             <p><strong>Estimate:</strong> EST-USA-00633</p>
             <p><strong>Assignee:</strong> Sunder Upreti</p>
-            <p className="text-blue-600 cursor-pointer">+ Add-ons</p>
           </div>
         </div>
       </div>
 
       {/* Tabs */}
-      <div>
-        <div className="flex gap-2 bg-gray-100 rounded-lg p-1 w-fit">
-          <button className="px-4 py-2 rounded bg-white shadow-sm text-sm font-medium">Application</button>
-          <button className="px-4 py-2 rounded text-sm font-medium text-gray-600 hover:bg-white">Documents</button>
-          <button className="px-4 py-2 rounded text-sm font-medium text-gray-600 hover:bg-white">Comms</button>
-        </div>
+      <div className="border-b mb-3">
+        <nav className="flex gap-6 text-sm">
+          <button className="border-b-2 border-blue-600 pb-2 text-blue-600 font-medium">Application</button>
+          <button className="text-gray-600 hover:text-gray-800">Documents</button>
+          <button className="text-gray-600 hover:text-gray-800">Comms</button>
+        </nav>
+      </div>
 
-        {/* Application Tab Content */}
-        <div className="mt-4 bg-white rounded-xl shadow border">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b text-left">
-                <tr>
-                  <th className="p-2">
-                    <input
-                      type="checkbox"
-                      ref={headerCheckboxRef}
-                      checked={allVisibleSelected}
-                      onChange={(e) => toggleSelectAllVisible(e.target.checked)}
-                    />
-                  </th>
-                  <th className="p-2">Traveller</th>
-                  <th className="p-2">Application Status</th>
-                  <th className="p-2">Visa Fee Category</th>
-                  <th className="p-2">Jurisdiction</th>
-                  <th className="p-2">Embassy Ref ID</th>
-                  <th className="p-2">Appointment</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pageRows.map((r: any) => (
-                  <tr key={r._id} className="border-b hover:bg-gray-50">
-                    <td className="p-2">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(String(r._id))}
-                        onChange={(e) => toggleRow(String(r._id), e.target.checked)}
-                      />
-                    </td>
-                    <td className="p-2 font-medium">{r.passport_number}</td>
-                    <td className="p-2">
-                      <span className="px-2 py-1 text-xs rounded bg-yellow-100 text-yellow-700">
-                        {r.status || '—'}
-                      </span>
-                    </td>
-                    <td className="p-2 text-blue-600 cursor-pointer">+ Add</td>
-                    <td className="p-2">{r.jurisdiction || '---'}</td>
-                    <td className="p-2">
-                      <button className="px-2 py-1 text-xs border rounded">Add Embassy Ref ID</button>
-                    </td>
-                    <td className="p-2">{fmtDateTime(r.appointment_date) || 'Select Date'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {/* Traveller Table */}
+      <div className="bg-white rounded-xl shadow border">
+        <div className="flex justify-between items-center px-4 py-2 border-b">
+          <h3 className="text-sm font-medium">Travellers</h3>
+          <div className="flex gap-2">
+            <button className="px-3 py-1 text-sm rounded border">+ Add Traveller</button>
+            <button className="px-3 py-1 text-sm rounded border">Wallet Details</button>
+            <button className="px-3 py-1 text-sm rounded border bg-blue-600 text-white">Complete Order</button>
           </div>
         </div>
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 text-left">
+            <tr>
+              <th className="p-2">
+                <input
+                  type="checkbox"
+                  ref={headerCheckboxRef}
+                  checked={allVisibleSelected}
+                  onChange={(e) => toggleSelectAllVisible(e.target.checked)}
+                />
+              </th>
+              <th className="p-2">Traveller</th>
+              <th className="p-2">Application Status</th>
+              <th className="p-2">Visa Fee Category</th>
+              <th className="p-2">Jurisdiction</th>
+              <th className="p-2">Embassy Ref ID</th>
+              <th className="p-2">Appointment</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pageRows.map((r: any) => {
+              const id = String(r._id);
+              return (
+                <tr key={id} className="border-t hover:bg-gray-50">
+                  <td className="p-2">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(id)}
+                      onChange={(e) => toggleRow(id, e.target.checked)}
+                    />
+                  </td>
+                  <td className="p-2 font-medium">{r.passport_number}</td>
+                  <td className="p-2">
+                    <span className="px-2 py-1 text-xs rounded bg-yellow-100 text-yellow-700">Ready to submit</span>
+                  </td>
+                  <td className="p-2 text-blue-600 cursor-pointer">+ Add</td>
+                  <td className="p-2">---</td>
+                  <td className="p-2">
+                    <button className="px-2 py-1 text-xs border rounded">Add Embassy Ref ID</button>
+                  </td>
+                  <td className="p-2">Select Date</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     </Shell>
   );
