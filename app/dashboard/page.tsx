@@ -605,287 +605,195 @@ export default function DashboardPage() {
 
   /* ------------- UI ------------- */
   return (
-    <Shell
-      title="Logistics Console"
-      active="dashboard"
-      rightActions={
-        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-          <button className="btn" onClick={openBulk}>
-            <span className="material-symbols-outlined">table_view</span> Bulk Search
-          </button>
-          <button className="btn" onClick={openScan}>
-            <span className="material-symbols-outlined">photo_camera</span> Scan / Upload
-          </button>
-          <label className="label" style={{ display:'flex', alignItems:'center', gap:6 }}>
-            <input type="checkbox" checked={autoSearch} onChange={(e) => setAutoSearch(e.target.checked)} />
-            Auto-search
-          </label>
-          <button className="btn" onClick={logout}>
-            <span className="material-symbols-outlined">logout</span> Logout
-          </button>
-        </div>
-      }
-    >
-      {/* Bulk search panel */}
+    <Shell title="Logistics Console" active="dashboard">
+      {/* 🔹 Top Toolbar */}
+      <div className="flex items-center gap-2 mb-4">
+        <button className="px-3 py-1.5 text-sm rounded bg-gray-100 hover:bg-gray-200" onClick={openBulk}>
+          Bulk Search
+        </button>
+        <button className="px-3 py-1.5 text-sm rounded bg-gray-100 hover:bg-gray-200" onClick={openScan}>
+          Scan / Upload
+        </button>
+        <label className="flex items-center gap-1 text-sm ml-auto">
+          <input type="checkbox" checked={autoSearch} onChange={(e) => setAutoSearch(e.target.checked)} />
+          Auto-search
+        </label>
+        <button className="px-3 py-1.5 text-sm rounded bg-gray-100 hover:bg-gray-200" onClick={logout}>
+          Logout
+        </button>
+      </div>
+
+      {/* 🔹 Bulk Search Panel */}
       {bulkOpen && (
-        <section className="card" style={{ marginTop: 12 }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-            <h3 className="label">Bulk Search (CSV / XLSX)</h3>
-            <button className="btn" onClick={closeBulk}>Close</button>
+        <section className="bg-white rounded-xl border shadow-sm p-4 mb-6">
+          <div className="flex justify-between items-center">
+            <h3 className="text-sm font-semibold">Bulk Search (CSV / XLSX)</h3>
+            <button className="text-sm px-2 py-1 bg-gray-100 rounded" onClick={closeBulk}>
+              Close
+            </button>
           </div>
 
-          <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap: 12, alignItems:'end', marginTop: 8 }}>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
             <div>
-              <label className="label">Upload file</label>
-              <input type="file" accept=".csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx" onChange={onBulkFile} />
-              <p className="label" style={{ marginTop: 6, opacity: .8 }}>
-                Auto-detects a <em>Passport</em> or <em>Order ID</em> column. You can override below.
+              <label className="block text-sm mb-1">Upload file</label>
+              <input
+                type="file"
+                accept=".csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx"
+                onChange={onBulkFile}
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Auto-detects <em>Passport</em> or <em>Order ID</em> column.
               </p>
             </div>
-            <div style={{ display:'flex', gap:8 }}>
-              <button className="btn primary" onClick={runBulkSearch} disabled={!bulkRows.length || loading === 'bulk'}>
+            <div className="flex gap-2 items-end">
+              <button
+                className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded"
+                onClick={runBulkSearch}
+                disabled={!bulkRows.length || loading === 'bulk'}
+              >
                 {loading === 'bulk' ? 'Searching…' : 'Run Bulk Search'}
               </button>
               {bulkFailures.length > 0 && (
-                <button className="btn" onClick={downloadFailuresCsv}>Download failures</button>
+                <button className="px-3 py-1.5 bg-gray-200 text-sm rounded" onClick={downloadFailuresCsv}>
+                  Download Failures
+                </button>
               )}
             </div>
           </div>
-
-          {bulkHeaders.length > 0 && (
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginTop: 12 }}>
-              <div>
-                <label className="label">Passport column</label>
-                <select className="input" value={bulkPassportCol} onChange={e=>setBulkPassportCol(e.target.value)}>
-                  <option value="">— none —</option>
-                  {bulkHeaders.map(h => <option key={`p-${h}`} value={h}>{h}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="label">Order ID column</label>
-                <select className="input" value={bulkOrderCol} onChange={e=>setBulkOrderCol(e.target.value)}>
-                  <option value="">— none —</option>
-                  {bulkHeaders.map(h => <option key={`o-${h}`} value={h}>{h}</option>)}
-                </select>
-              </div>
-            </div>
-          )}
-
-          {(loading === 'bulk' || bulkProgress.total > 0) && (
-            <div style={{ marginTop: 12 }}>
-              <div className="label" style={{ marginBottom: 6 }}>
-                Progress: {bulkProgress.done}/{bulkProgress.total}
-                {bulkProgress.running ? ` (running ${bulkProgress.running})` : ''} •
-                {bulkFailures.length ? ` failures ${bulkFailures.length}` : ' no failures'}
-              </div>
-              <div style={{ height: 10, background:'#eee', borderRadius: 6, overflow:'hidden' }}>
-                <div style={{
-                  height: '100%',
-                  width: `${bulkProgress.total ? (bulkProgress.done / bulkProgress.total) * 100 : 0}%`,
-                  background: '#60a5fa'
-                }} />
-              </div>
-            </div>
-          )}
-
-          {bulkFailures.length > 0 && (
-            <details style={{ marginTop: 12 }}>
-              <summary className="label">Show failures</summary>
-              <ul className="label" style={{ marginTop: 8 }}>
-                {bulkFailures.slice(0, 50).map((f, i) => (
-                  <li key={i}>{f.input}: {f.reason}</li>
-                ))}
-                {bulkFailures.length > 50 && <li>…and {bulkFailures.length - 50} more</li>}
-              </ul>
-            </details>
-          )}
         </section>
       )}
 
-      {/* Scan / Upload drawer (single image) */}
+      {/* 🔹 Scan/Upload Panel */}
       {scanOpen && (
-        <section className="card" style={{ marginTop: 12 }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-            <h3 className="label">Scan / Upload Passport</h3>
-            <button className="btn" onClick={closeScan}>Close</button>
+        <section className="bg-white rounded-xl border shadow-sm p-4 mb-6">
+          <div className="flex justify-between items-center">
+            <h3 className="text-sm font-semibold">Scan / Upload Passport</h3>
+            <button className="text-sm px-2 py-1 bg-gray-100 rounded" onClick={closeScan}>
+              Close
+            </button>
           </div>
-
-          <p className="label" style={{ marginTop: 8 }}>
-            Take a clear photo of the passport page with the MRZ lines, or upload an existing image/PDF.
-          </p>
-
-          <div style={{ display:'flex', gap:16, alignItems:'flex-start', flexWrap:'wrap', marginTop: 8 }}>
+          <div className="mt-3 flex gap-4">
             <div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*,application/pdf"
-                capture="environment"
-                onChange={onPickFile}
-              />
-              <div className="label" style={{ marginTop: 8, opacity: 0.8 }}>
-                Tip: On mobile, this opens the camera for a fresh capture.
-              </div>
-              <div style={{ marginTop: 12, display:'flex', gap:8 }}>
-                <button className="btn primary" onClick={extractAndSearch} disabled={!scanFile || scanBusy}>
+              <input ref={fileInputRef} type="file" accept="image/*,application/pdf" capture="environment" onChange={onPickFile} />
+              <div className="text-xs text-gray-500 mt-1">Tip: On mobile, this opens the camera.</div>
+              <div className="flex gap-2 mt-3">
+                <button
+                  className="px-3 py-1.5 text-sm rounded bg-blue-600 text-white"
+                  onClick={extractAndSearch}
+                  disabled={!scanFile || scanBusy}
+                >
                   {scanBusy ? 'Reading…' : 'Extract & Search'}
                 </button>
-                <button className="btn" onClick={() => { setScanFile(null); setScanPreview(null); if (fileInputRef.current) fileInputRef.current.value=''; }}>
+                <button
+                  className="px-3 py-1.5 text-sm rounded bg-gray-100"
+                  onClick={() => {
+                    setScanFile(null);
+                    setScanPreview(null);
+                    if (fileInputRef.current) fileInputRef.current.value = '';
+                  }}
+                >
                   Clear
                 </button>
               </div>
             </div>
-
             {scanPreview && (
-              <div style={{ border:'1px solid #0001', borderRadius: 8, padding: 8, maxWidth: 280 }}>
-                <div className="label" style={{ marginBottom: 6 }}>Preview</div>
+              <div className="border rounded p-2 max-w-xs">
+                <div className="text-xs mb-1">Preview</div>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={scanPreview} alt="preview" style={{ maxWidth: '100%', height: 'auto', borderRadius: 6 }} />
+                <img src={scanPreview} alt="preview" className="rounded" />
               </div>
             )}
           </div>
         </section>
       )}
 
-      {/* === Two-column grid: Search (left) + Filters/Pagination (right) === */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))',
-          gap: 16,
-          marginTop: 16,
-        }}
-      >
-        {/* search (single) */}
-        <section className="card">
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'end' }}>
-            <div>
-              <label className="label">Passport Number Or Order ID</label>
-              <input
-                className="input"
-                placeholder="e.g. A0000000 or SMV-ABC-00000"
-                value={passport}
-                onChange={(e) => setPassport(e.target.value)}
-                onKeyDown={onPassportKey}
-              />
-            </div>
-            <button className="btn primary" onClick={searchByPassport} disabled={!passport.trim() || loading === 'passport'}>
+      {/* 🔹 Search + Filters */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <section className="bg-white rounded-xl border shadow-sm p-4">
+          <h3 className="text-sm font-semibold mb-2">Search</h3>
+          <div className="flex gap-2">
+            <input
+              className="flex-1 border rounded px-3 py-1.5 text-sm"
+              placeholder="e.g. W1184034"
+              value={passport}
+              onChange={(e) => setPassport(e.target.value)}
+              onKeyDown={onPassportKey}
+            />
+            <button
+              className="px-3 py-1.5 text-sm rounded bg-blue-600 text-white"
+              onClick={searchByPassport}
+              disabled={!passport.trim() || loading === 'passport'}
+            >
               {loading === 'passport' ? 'Searching…' : 'Search'}
             </button>
           </div>
-
-          <div style={{ height: 12 }} />
-
-{/*           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'end' }}>
-            <div>
-              <label className="label">Order ID</label>
-              <input
-                className="input"
-                placeholder="e.g. SMV-SGP-07907"
-                value={orderId}
-                onChange={(e) => setOrderId(e.target.value)}
-                onKeyDown={onOrderKey}
-              />
-            </div>
-            <button className="btn" onClick={searchByOrder} disabled={!orderId.trim() || loading === 'order'}>
-              {loading === 'order' ? 'Searching…' : 'Search Order'}
-            </button>
-          </div> */}
         </section>
 
-        {/* filters + pagination */}
-        <section className="card">
-          <h3 className="label">Filters (optional)</h3>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+        <section className="bg-white rounded-xl border shadow-sm p-4">
+          <h3 className="text-sm font-semibold mb-2">Filters (optional)</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
-              <label className="label">Status (CSV)</label>
-              <input className="input" placeholder="e.g. UNASSIGNED,PENDING" value={statusCsv} onChange={(e)=>setStatusCsv(e.target.value)} />
+              <label className="block text-sm">Status (CSV)</label>
+              <input className="w-full border rounded px-2 py-1 text-sm" value={statusCsv} onChange={(e) => setStatusCsv(e.target.value)} />
             </div>
             <div>
-              <label className="label">Type (CSV)</label>
-              <input className="input" placeholder="e.g. SUBMISSION,PICKUP" value={typeCsv} onChange={(e)=>setTypeCsv(e.target.value)} />
+              <label className="block text-sm">Type (CSV)</label>
+              <input className="w-full border rounded px-2 py-1 text-sm" value={typeCsv} onChange={(e) => setTypeCsv(e.target.value)} />
             </div>
             <div>
-              <label className="label">Current Task</label>
-              <input className="input" placeholder="leave empty to omit" value={currentTask} onChange={(e)=>setCurrentTask(e.target.value)} />
+              <label className="block text-sm">Current Task</label>
+              <input className="w-full border rounded px-2 py-1 text-sm" value={currentTask} onChange={(e) => setCurrentTask(e.target.value)} />
             </div>
-          </div>
-
-          <div style={{ height: 12 }} />
-
-          <h3 className="label">Pagination</h3>
-          <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
-            <label className="label">Limit</label>
-            <input className="input" style={{ width: 90 }} type="number" min={1} value={limit}
-                  onChange={(e)=>setLimit(Math.max(1, Number(e.target.value) || 10))} />
-            <label className="label">Skip</label>
-            <input className="input" style={{ width: 120 }} type="number" min={0} value={skip}
-                  onChange={(e)=>setSkip(Math.max(0, Number(e.target.value) || 0))} />
-
-            <button className="btn" onClick={() => setSkip((s) => Math.max(0, s - limit))} disabled={skip === 0}>◀ Prev</button>
-            <button
-              className="btn"
-              onClick={() => setSkip((s) => s + limit)}
-              disabled={(total && (skip + limit) >= total) || (!total && rows.length < limit)}
-            >
-              Next ▶
-            </button>
-
-            <span className="label" style={{ marginLeft: 8 }}>
-              {total ? `Showing ${showingFrom}-${showingTo} of ${total}` : rows.length ? `Showing ${rows.length}` : 'No results yet'}
-            </span>
           </div>
         </section>
       </div>
-      {/* === /Two-column grid === */}
 
-      {/* results + bulk toolbar */}
-      <section className="card" style={{ marginTop: 24 }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, flexWrap:'wrap' }}>
-          <h3 className="label">Results</h3>
-
-          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-            <span className="label">{selectedIds.size} selected</span>
-            <select className="input" style={{ width: 260 }} value={bulkStatus} onChange={e=>setBulkStatus(e.target.value)}>
+      {/* 🔹 Results */}
+      <section className="bg-white rounded-xl border shadow-sm p-4 mt-6">
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="text-sm font-semibold">Results</h3>
+          <div className="flex gap-2 items-center">
+            <span className="text-sm">{selectedIds.size} selected</span>
+            <select className="border rounded px-2 py-1 text-sm" value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value)}>
               <option value="">Update logistics status…</option>
-              {BULK_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              {BULK_STATUS_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
             </select>
-            <button className="btn primary" onClick={applyBulkStatus} disabled={!bulkStatus || selectedIds.size === 0}>
-              Apply to selected
+            <button className="px-3 py-1.5 text-sm rounded bg-blue-600 text-white" onClick={applyBulkStatus} disabled={!bulkStatus || selectedIds.size === 0}>
+              Apply
             </button>
-            <button className="btn" onClick={resetToPrevious} disabled={!lastChangeRef.current}>Reset to previous</button>
-            {selectedIds.size > 0 && <button className="btn" onClick={clearSelection}>Clear selection</button>}
+            <button className="px-3 py-1.5 text-sm rounded bg-gray-100" onClick={resetToPrevious} disabled={!lastChangeRef.current}>
+              Reset
+            </button>
+            {selectedIds.size > 0 && (
+              <button className="px-3 py-1.5 text-sm rounded bg-gray-100" onClick={clearSelection}>
+                Clear
+              </button>
+            )}
           </div>
         </div>
 
-        {error && <p className="label" style={{ color:'#fca5a5', marginTop: 8 }}>{error}</p>}
+        {error && <p className="text-sm text-red-500 mb-2">{error}</p>}
 
-        {pageRows && pageRows.length > 0 && (
-          <div style={{ overflowX: 'auto', marginTop: 12 }}>
-            <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
+        {pageRows.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead className="bg-gray-50">
                 <tr>
-                  <th style={{ width: 44, padding:'8px' }}>
-                    <div style={{ display:'flex', alignItems:'center', justifyContent:'center' }}>
-                      <input
-                        ref={headerCheckboxRef}
-                        type="checkbox"
-                        aria-label="Select all visible"
-                        checked={allVisibleSelected}
-                        onChange={(e) => toggleSelectAllVisible(e.target.checked)}
-                      />
-                    </div>
-                  </th>
-                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>SMV Order</th>
-                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Passport</th>
-                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Type</th>
-                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Status</th>
-                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Logistics Status</th>
-                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Assigned For</th>
-                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Appointment</th>
-                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Travel End</th>
-                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Pickup Address</th>
-                  <th className="label" style={{ textAlign:'left', padding:'8px' }}>Drop Address</th>
+                  <th className="p-2">#</th>
+                  <th className="p-2">SMV Order</th>
+                  <th className="p-2">Passport</th>
+                  <th className="p-2">Type</th>
+                  <th className="p-2">Status</th>
+                  <th className="p-2">Logistics</th>
+                  <th className="p-2">Assigned</th>
+                  <th className="p-2">Appointment</th>
+                  <th className="p-2">Travel End</th>
+                  <th className="p-2">Pickup</th>
+                  <th className="p-2">Drop</th>
                 </tr>
               </thead>
               <tbody>
@@ -895,38 +803,24 @@ export default function DashboardPage() {
                   const apiStatus = (r.status ?? '').toString();
 
                   return (
-                    <tr key={id} style={{ borderTop:'1px solid #2223', verticalAlign:'top', background: isSelected ? 'rgba(109,94,252,0.06)' : 'transparent' }}>
-                      <td style={{ padding:'8px' }}>
-                        <div style={{ display:'flex', alignItems:'center', justifyContent:'center' }}>
-                          <input
-                            type="checkbox"
-                            aria-label={`Select row ${id}`}
-                            checked={isSelected}
-                            onChange={(e) => toggleRow(id, e.target.checked)}
-                          />
-                        </div>
+                    <tr key={id} className={`border-t ${isSelected ? 'bg-blue-50' : ''}`}>
+                      <td className="p-2">
+                        <input type="checkbox" checked={isSelected} onChange={(e) => toggleRow(id, e.target.checked)} />
                       </td>
-
-                      <td style={{ padding:'8px' }}>{r.smv_order_id || ''}</td>
-                      <td style={{ padding:'8px', fontWeight:600 }}>{r.passport_number || ''}</td>
-                      <td style={{ padding:'8px' }}>{r.type || ''}</td>
-
-                      {/* API status pill */}
-                      <td style={{ padding:'8px' }}>
+                      <td className="p-2">{r.smv_order_id}</td>
+                      <td className="p-2 font-semibold">{r.passport_number}</td>
+                      <td className="p-2">{r.type}</td>
+                      <td className="p-2">
                         <StatusPill kind={apiStatusKind(apiStatus)}>{apiStatus || '—'}</StatusPill>
                       </td>
-
-                      {/* Logistics status pill */}
-                      <td style={{ padding:'8px' }}>
+                      <td className="p-2">
                         <StatusPill kind={logisticsKind(r)}>{displayLogisticsStatus(r)}</StatusPill>
                       </td>
-
-                      <td style={{ padding:'8px' }}>{r.assigned_for || ''}</td>
-                      <td style={{ padding:'8px' }}>{fmtDateTime(r.appointment_date)}</td>
-                      <td style={{ padding:'8px' }}>{fmtDateOnly(r.travel_end_date)}</td>
-
-                      <AddressCell label="Pickup Address" text={r.pickup_address} />
-                      <AddressCell label="Drop Address"   text={r.drop_address} />
+                      <td className="p-2">{r.assigned_for}</td>
+                      <td className="p-2">{fmtDateTime(r.appointment_date)}</td>
+                      <td className="p-2">{fmtDateOnly(r.travel_end_date)}</td>
+                      <AddressCell label="Pickup" text={r.pickup_address} />
+                      <AddressCell label="Drop" text={r.drop_address} />
                     </tr>
                   );
                 })}
@@ -936,15 +830,13 @@ export default function DashboardPage() {
         )}
       </section>
 
-      {/* Developer Tools (keep raw JSON here) */}
-      <section className="card" style={{ marginTop: 16 }}>
-        <h3 className="label">Developer Tools</h3>
+      {/* 🔹 Developer Tools */}
+      <section className="bg-white rounded-xl border shadow-sm p-4 mt-6">
+        <h3 className="text-sm font-semibold">Developer Tools</h3>
         {result && (
-          <details style={{ marginTop: 8 }}>
-            <summary className="label">Debug / Raw JSON (proxy response)</summary>
-            <pre style={{ whiteSpace:'pre-wrap', fontSize:12, marginTop: 8 }}>
-              {JSON.stringify(result, null, 2)}
-            </pre>
+          <details className="mt-2">
+            <summary className="cursor-pointer text-blue-600">Debug / Raw JSON</summary>
+            <pre className="text-xs bg-gray-50 p-2 rounded mt-2">{JSON.stringify(result, null, 2)}</pre>
           </details>
         )}
       </section>
