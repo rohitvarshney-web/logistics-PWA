@@ -46,14 +46,14 @@ const BULK_STATUS_OPTIONS = [
   { value: 'PASSPORT_COURIERED', label: 'Passport Couriered' },
 ];
 
-/* regex + keys */
+/* passport regex */
 const PASSPORT_REGEX = /\b([A-Z0-9]{7,10})\b/i;
 const PASSPORT_KEYS = ['passport', 'passport_number', 'passport no', 'passportno', 'pp_no', 'pp', 'ppnumber'];
 const ORDER_KEYS = ['order', 'order_id', 'order id', 'smv_order_id', 'smv order id', 'reference', 'ref', 'ref_no'];
 
 /* ---------- component ---------- */
 export default function DashboardPage() {
-  /* states */
+  /* inputs */
   const [passport, setPassport] = useState('');
   const [orderId, setOrderId] = useState('');
   const [limit, setLimit] = useState(10);
@@ -66,19 +66,23 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<any>(null);
 
+  /* selection */
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const headerCheckboxRef = useRef<HTMLInputElement>(null);
 
+  /* logistics state */
   const [localStatus, setLocalStatus] = useState<Map<string, string>>(new Map());
   const lastChangeRef = useRef<{ prev: Map<string, string | undefined>; ids: Set<string> } | null>(null);
   const [bulkStatus, setBulkStatus] = useState<string>('');
 
+  /* scan/upload */
   const [scanOpen, setScanOpen] = useState(false);
   const [scanBusy, setScanBusy] = useState(false);
   const [scanFile, setScanFile] = useState<File | null>(null);
   const [scanPreview, setScanPreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  /* bulk file */
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkHeaders, setBulkHeaders] = useState<string[]>([]);
   const [bulkRows, setBulkRows] = useState<Record<string, any>[]>([]);
@@ -96,7 +100,7 @@ export default function DashboardPage() {
   const dTypeCsv = useDebounced(typeCsv, 500);
   const dCurrentTask = useDebounced(currentTask, 500);
 
-  /* data */
+  /* data extraction */
   const rows: any[] = result?.result?.data?.data || result?.rows || [];
   const total: number = result?.result?.data?.count ?? (Array.isArray(rows) ? rows.length : 0);
   const pageRows = useMemo(() => {
@@ -108,7 +112,6 @@ export default function DashboardPage() {
   const visibleIds = pageRows.map((r) => String(r._id));
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
 
-  /* selection */
   function toggleRow(id: string, checked: boolean) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -126,7 +129,7 @@ export default function DashboardPage() {
     });
   }
 
-  /* -------- UI -------- */
+  /* ----------------- UI ----------------- */
   return (
     <Shell
       title="Logistics Console"
@@ -146,7 +149,7 @@ export default function DashboardPage() {
         </div>
       }
     >
-      {/* ---------- Top summary cards ---------- */}
+      {/* Top summary cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
         <div className="bg-white rounded-xl border shadow-sm p-4">
           <div className="flex justify-between items-start">
@@ -184,7 +187,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ---------- Tabs ---------- */}
+      {/* Tabs */}
       <div className="border-b border-gray-200 mb-4">
         <nav className="flex gap-6 text-sm">
           <button className="pb-2 border-b-2 border-blue-600 text-blue-600 font-medium">
@@ -195,7 +198,7 @@ export default function DashboardPage() {
         </nav>
       </div>
 
-      {/* ---------- Travellers Table ---------- */}
+      {/* Traveller Table */}
       <div className="bg-white rounded-xl border shadow-sm">
         <div className="flex justify-between items-center px-4 py-2 border-b">
           <h3 className="text-sm font-medium">Travellers</h3>
@@ -254,9 +257,6 @@ export default function DashboardPage() {
           </tbody>
         </table>
       </div>
-
-      {/* ---------- Bulk Search, Scan, Filters, Pagination, Developer Tools ---------- */}
-      {/* These would follow the same styled-card pattern as above */}
     </Shell>
   );
 }
