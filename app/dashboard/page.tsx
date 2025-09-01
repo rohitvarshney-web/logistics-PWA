@@ -38,40 +38,6 @@ function csvEscape(s: string) {
   return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
 }
 
-/* address cell with clamp + expandable details */
-function AddressCell({
-  label,
-  text,
-  maxWidth = 280,
-}: {
-  label: string;
-  text?: string;
-  maxWidth?: number;
-}) {
-  const val = (text ?? '').trim();
-  return (
-    <td className="p-2 align-top">
-      <div style={{ maxWidth }}>
-        <div
-          title={val || label}
-          className="line-clamp-2 text-sm break-words text-gray-700"
-          style={{ opacity: val ? 1 : 0.6 }}
-        >
-          {val || '—'}
-        </div>
-        {val && (
-          <details className="mt-1">
-            <summary className="cursor-pointer text-xs text-blue-600">Expand</summary>
-            <div className="mt-1 p-2 border rounded bg-gray-50 text-sm max-h-60 overflow-auto whitespace-pre-wrap">
-              {val}
-            </div>
-          </details>
-        )}
-      </div>
-    </td>
-  );
-}
-
 /* bulk statuses */
 const BULK_STATUS_OPTIONS = [
   { value: 'DOCUMENTS_RECEIVED', label: 'Documents Received' },
@@ -80,16 +46,14 @@ const BULK_STATUS_OPTIONS = [
   { value: 'PASSPORT_COURIERED', label: 'Passport Couriered' },
 ];
 
-/* passport detection heuristic */
+/* regex + keys */
 const PASSPORT_REGEX = /\b([A-Z0-9]{7,10})\b/i;
-
-/* ----- column heuristics for bulk import ----- */
 const PASSPORT_KEYS = ['passport', 'passport_number', 'passport no', 'passportno', 'pp_no', 'pp', 'ppnumber'];
 const ORDER_KEYS = ['order', 'order_id', 'order id', 'smv_order_id', 'smv order id', 'reference', 'ref', 'ref_no'];
 
 /* ---------- component ---------- */
 export default function DashboardPage() {
-  /* --- state & logic (kept as-is) --- */
+  /* states */
   const [passport, setPassport] = useState('');
   const [orderId, setOrderId] = useState('');
   const [limit, setLimit] = useState(10);
@@ -104,6 +68,7 @@ export default function DashboardPage() {
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const headerCheckboxRef = useRef<HTMLInputElement>(null);
+
   const [localStatus, setLocalStatus] = useState<Map<string, string>>(new Map());
   const lastChangeRef = useRef<{ prev: Map<string, string | undefined>; ids: Set<string> } | null>(null);
   const [bulkStatus, setBulkStatus] = useState<string>('');
@@ -115,7 +80,6 @@ export default function DashboardPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [bulkOpen, setBulkOpen] = useState(false);
-  const [bulkFile, setBulkFile] = useState<File | null>(null);
   const [bulkHeaders, setBulkHeaders] = useState<string[]>([]);
   const [bulkRows, setBulkRows] = useState<Record<string, any>[]>([]);
   const [bulkPassportCol, setBulkPassportCol] = useState<string>('');
@@ -123,6 +87,7 @@ export default function DashboardPage() {
   const [bulkProgress, setBulkProgress] = useState({ done: 0, total: 0, running: 0, failed: 0 });
   const [bulkFailures, setBulkFailures] = useState<Array<{ input: string; reason: string }>>([]);
 
+  /* debounced */
   const dPassport = useDebounced(passport, 500);
   const dOrderId = useDebounced(orderId, 500);
   const dLimit = useDebounced(limit, 300);
@@ -131,7 +96,7 @@ export default function DashboardPage() {
   const dTypeCsv = useDebounced(typeCsv, 500);
   const dCurrentTask = useDebounced(currentTask, 500);
 
-  /* data extraction */
+  /* data */
   const rows: any[] = result?.result?.data?.data || result?.rows || [];
   const total: number = result?.result?.data?.count ?? (Array.isArray(rows) ? rows.length : 0);
   const pageRows = useMemo(() => {
@@ -143,6 +108,7 @@ export default function DashboardPage() {
   const visibleIds = pageRows.map((r) => String(r._id));
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
 
+  /* selection */
   function toggleRow(id: string, checked: boolean) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -160,50 +126,55 @@ export default function DashboardPage() {
     });
   }
 
-  /* ----------------- UI ----------------- */
+  /* -------- UI -------- */
   return (
     <Shell
       title="Logistics Console"
       active="dashboard"
       rightActions={
         <div className="flex items-center gap-3">
-          <button className="px-3 py-1 text-sm rounded border" onClick={() => setBulkOpen(true)}>
+          <button className="px-3 py-1.5 text-sm border rounded-lg bg-white hover:bg-gray-50" onClick={() => setBulkOpen(true)}>
             Bulk Search
           </button>
-          <button className="px-3 py-1 text-sm rounded border" onClick={() => setScanOpen(true)}>
+          <button className="px-3 py-1.5 text-sm border rounded-lg bg-white hover:bg-gray-50" onClick={() => setScanOpen(true)}>
             Scan / Upload
           </button>
           <label className="flex items-center gap-2 text-sm text-gray-600">
             <input type="checkbox" checked={autoSearch} onChange={(e) => setAutoSearch(e.target.checked)} /> Auto-search
           </label>
-          <button className="px-3 py-1 text-sm rounded border text-red-600">Logout</button>
+          <button className="px-3 py-1.5 text-sm border rounded-lg text-red-600">Logout</button>
         </div>
       }
     >
-      {/* Top summary cards */}
+      {/* ---------- Top summary cards ---------- */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-        <div className="bg-white rounded-xl shadow p-4 border">
+        <div className="bg-white rounded-xl border shadow-sm p-4">
           <div className="flex justify-between items-start">
             <div>
-              <h3 className="text-lg font-semibold">🇺🇸 United States of America</h3>
-              <p className="text-sm text-gray-500">Order ID: SMV-USA-00633</p>
-              <p className="text-sm text-gray-500">Travel Dates: Oct 09 – Oct 16</p>
-              <p className="text-sm text-gray-500">Travellers: 1</p>
+              <h3 className="text-base font-semibold flex items-center gap-2">
+                <span>🇺🇸</span> United States of America
+              </h3>
+              <p className="text-sm text-gray-600">Order ID: SMV-USA-00633</p>
+              <p className="text-sm text-gray-600">Travel Dates: Oct 09 – Oct 16</p>
+              <p className="text-sm text-gray-600">Travellers: 1</p>
             </div>
-            <button className="px-3 py-1 text-sm rounded bg-green-600 text-white hover:bg-green-700">
+            <button className="px-3 py-1.5 text-sm font-medium bg-green-600 text-white rounded-lg hover:bg-green-700">
               Classify Documents
             </button>
           </div>
         </div>
-        <div className="bg-white rounded-xl shadow p-4 border">
+
+        <div className="bg-white rounded-xl border shadow-sm p-4">
           <div className="flex justify-between items-start">
             <div>
-              <h3 className="text-lg font-semibold">Tourist Visa</h3>
-              <span className="inline-block text-xs px-2 py-1 rounded bg-blue-100 text-blue-600 mt-2">
+              <h3 className="text-base font-semibold">Tourist Visa</h3>
+              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700 mt-2">
                 Ready to Submit
               </span>
             </div>
-            <button className="px-3 py-1 text-sm rounded border">Upload Documents</button>
+            <button className="px-3 py-1.5 text-sm border rounded-lg bg-gray-100 hover:bg-gray-200">
+              Upload Documents
+            </button>
           </div>
           <div className="mt-3 text-sm text-gray-600 space-y-1">
             <p><strong>Travel Agency:</strong> ORGO.travel</p>
@@ -213,26 +184,28 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="border-b mb-3">
+      {/* ---------- Tabs ---------- */}
+      <div className="border-b border-gray-200 mb-4">
         <nav className="flex gap-6 text-sm">
-          <button className="border-b-2 border-blue-600 pb-2 text-blue-600 font-medium">Application</button>
-          <button className="text-gray-600 hover:text-gray-800">Documents</button>
-          <button className="text-gray-600 hover:text-gray-800">Comms</button>
+          <button className="pb-2 border-b-2 border-blue-600 text-blue-600 font-medium">
+            Application
+          </button>
+          <button className="pb-2 text-gray-600 hover:text-gray-800">Documents</button>
+          <button className="pb-2 text-gray-600 hover:text-gray-800">Comms</button>
         </nav>
       </div>
 
-      {/* Traveller Table */}
-      <div className="bg-white rounded-xl shadow border">
+      {/* ---------- Travellers Table ---------- */}
+      <div className="bg-white rounded-xl border shadow-sm">
         <div className="flex justify-between items-center px-4 py-2 border-b">
           <h3 className="text-sm font-medium">Travellers</h3>
           <div className="flex gap-2">
-            <button className="px-3 py-1 text-sm rounded border">+ Add Traveller</button>
-            <button className="px-3 py-1 text-sm rounded border">Wallet Details</button>
-            <button className="px-3 py-1 text-sm rounded border bg-blue-600 text-white">Complete Order</button>
+            <button className="px-3 py-1.5 text-sm border rounded-lg">+ Add Traveller</button>
+            <button className="px-3 py-1.5 text-sm border rounded-lg">Wallet Details</button>
+            <button className="px-3 py-1.5 text-sm border rounded-lg bg-blue-600 text-white">Complete Order</button>
           </div>
         </div>
-        <table className="w-full text-sm">
+        <table className="w-full text-sm divide-y divide-gray-200">
           <thead className="bg-gray-50 text-left">
             <tr>
               <th className="p-2">
@@ -255,7 +228,7 @@ export default function DashboardPage() {
             {pageRows.map((r: any) => {
               const id = String(r._id);
               return (
-                <tr key={id} className="border-t hover:bg-gray-50">
+                <tr key={id} className="hover:bg-gray-50">
                   <td className="p-2">
                     <input
                       type="checkbox"
@@ -265,20 +238,25 @@ export default function DashboardPage() {
                   </td>
                   <td className="p-2 font-medium">{r.passport_number}</td>
                   <td className="p-2">
-                    <span className="px-2 py-1 text-xs rounded bg-yellow-100 text-yellow-700">Ready to submit</span>
+                    <span className="px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
+                      Ready to Submit
+                    </span>
                   </td>
                   <td className="p-2 text-blue-600 cursor-pointer">+ Add</td>
                   <td className="p-2">---</td>
                   <td className="p-2">
                     <button className="px-2 py-1 text-xs border rounded">Add Embassy Ref ID</button>
                   </td>
-                  <td className="p-2">Select Date</td>
+                  <td className="p-2 text-gray-500">Select Date</td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
+
+      {/* ---------- Bulk Search, Scan, Filters, Pagination, Developer Tools ---------- */}
+      {/* These would follow the same styled-card pattern as above */}
     </Shell>
   );
 }
