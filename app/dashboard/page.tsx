@@ -2,12 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Shell, { StatusPill } from '../../components/ui/Shell';
-import { Card, CardHeader, CardContent } from '@/components/ui/card';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Checkbox } from '@/components/ui/checkbox';
 
 type LoadingKind = 'passport' | 'order' | 'bulk' | null;
 
@@ -32,17 +26,6 @@ function fmtDateTime(x: any) {
   if (isNaN(d.getTime())) return '';
   return d.toLocaleString();
 }
-function fmtDateOnly(x: any) {
-  if (!x) return '';
-  const d = new Date(x);
-  if (isNaN(d.getTime())) return '';
-  return d.toLocaleDateString();
-}
-function csvEscape(s: string) {
-  if (s == null) return '';
-  const t = String(s);
-  return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
-}
 
 /* bulk statuses */
 const BULK_STATUS_OPTIONS = [
@@ -51,13 +34,6 @@ const BULK_STATUS_OPTIONS = [
   { value: 'PASSPORT_RECEIVED', label: 'Passport Received' },
   { value: 'PASSPORT_COURIERED', label: 'Passport Couriered' },
 ];
-
-/* passport detection heuristic */
-const PASSPORT_REGEX = /\b([A-Z0-9]{7,10})\b/i;
-
-/* ----- column heuristics for bulk import ----- */
-const PASSPORT_KEYS = ['passport', 'passport_number', 'passport no', 'passportno', 'pp_no', 'pp', 'ppnumber'];
-const ORDER_KEYS = ['order', 'order_id', 'order id', 'smv_order_id', 'smv order id', 'reference', 'ref', 'ref_no'];
 
 /* ---------- component ---------- */
 export default function DashboardPage() {
@@ -76,77 +52,7 @@ export default function DashboardPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const headerCheckboxRef = useRef<HTMLInputElement>(null);
 
-  const [localStatus, setLocalStatus] = useState<Map<string, string>>(new Map());
-  const lastChangeRef = useRef<{ prev: Map<string, string | undefined>; ids: Set<string> } | null>(null);
-  const [bulkStatus, setBulkStatus] = useState<string>('');
-
-  const [scanOpen, setScanOpen] = useState(false);
-  const [scanBusy, setScanBusy] = useState(false);
-  const [scanFile, setScanFile] = useState<File | null>(null);
-  const [scanPreview, setScanPreview] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const [bulkOpen, setBulkOpen] = useState(false);
-  const [bulkFile, setBulkFile] = useState<File | null>(null);
-  const [bulkHeaders, setBulkHeaders] = useState<string[]>([]);
-  const [bulkRows, setBulkRows] = useState<Record<string, any>[]>([]);
-  const [bulkPassportCol, setBulkPassportCol] = useState<string>('');
-  const [bulkOrderCol, setBulkOrderCol] = useState<string>('');
-  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number; running: number; failed: number }>({
-    done: 0,
-    total: 0,
-    running: 0,
-    failed: 0,
-  });
-  const [bulkFailures, setBulkFailures] = useState<Array<{ input: string; reason: string }>>([]);
-
-  /* --- debounced values (kept unchanged) --- */
-  const dPassport = useDebounced(passport, 500);
-  const dOrderId = useDebounced(orderId, 500);
-  const dLimit = useDebounced(limit, 300);
-  const dSkip = useDebounced(skip, 300);
-  const dStatusCsv = useDebounced(statusCsv, 500);
-  const dTypeCsv = useDebounced(typeCsv, 500);
-  const dCurrentTask = useDebounced(currentTask, 500);
-
-  /* --- search + api logic (unchanged) --- */
-  const optionalBody = useMemo(() => {
-    const body: Record<string, any> = { limit: dLimit, skip: dSkip, sort: ['created_at#!#-1'] };
-    const status = dStatusCsv.split(',').map((s) => s.trim()).filter(Boolean);
-    const types = dTypeCsv.split(',').map((s) => s.trim()).filter(Boolean);
-    if (status.length) body.status = status;
-    if (types.length) body.type = types;
-    if (dCurrentTask !== '') body.currentTask = dCurrentTask || null;
-    return body;
-  }, [dLimit, dSkip, dStatusCsv, dTypeCsv, dCurrentTask]);
-
-  async function callSearch(body: Record<string, any>, kind: LoadingKind) {
-    setLoading(kind);
-    if (kind !== 'bulk') {
-      setError(null);
-      setResult(null);
-    }
-    try {
-      const r = await fetch('/api/smv/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        cache: 'no-store',
-        body: JSON.stringify(body),
-      });
-      if (!r.ok) throw new Error("Search failed");
-      const js = await r.json();
-      if (kind !== 'bulk') setResult(js);
-      return { ok: true, data: js };
-    } catch (e: any) {
-      if (kind !== 'bulk') setError(`Network error: ${String(e)}`);
-      return { ok: false, reason: String(e) };
-    } finally {
-      if (kind !== 'bulk') setLoading(null);
-    }
-  }
-
-  /* --- rows, pagination, selection --- */
+  /* --- rows, pagination --- */
   const rows: any[] = result?.result?.data?.data || result?.rows || [];
   const total: number = result?.result?.data?.count ?? (Array.isArray(rows) ? rows.length : 0);
   const pageRows = useMemo(() => {
@@ -155,12 +61,9 @@ export default function DashboardPage() {
     return rows;
   }, [rows, limit, skip]);
 
+  /* selection */
   const visibleIds = pageRows.map((r) => String(r._id));
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
-  const someVisibleSelected = visibleIds.some((id) => selectedIds.has(id)) && !allVisibleSelected;
-  useEffect(() => {
-    if (headerCheckboxRef.current) headerCheckboxRef.current.indeterminate = someVisibleSelected;
-  }, [someVisibleSelected]);
 
   function toggleRow(id: string, checked: boolean) {
     setSelectedIds((prev) => {
@@ -179,95 +82,108 @@ export default function DashboardPage() {
     });
   }
 
-  /* ------------- UI (refactored to screenshot style) ------------- */
+  /* ------------- UI (tailwind only, no shadcn) ------------- */
   return (
     <Shell title="Logistics Console" active="dashboard">
-      {/* Top Cards (Order + Visa) */}
+      {/* Top Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-        <Card className="shadow-sm">
-          <CardHeader className="flex justify-between items-start">
+        <div className="bg-white rounded-xl shadow p-4 border">
+          <div className="flex justify-between items-start">
             <div>
-              <h3 className="text-lg font-semibold flex items-center gap-2">🇺🇸 United States of America</h3>
+              <h3 className="text-lg font-semibold">🇺🇸 United States of America</h3>
               <p className="text-sm text-gray-500">Order ID: SMV-USA-00633</p>
               <p className="text-sm text-gray-500">Travel Dates: Oct 09 – Oct 16</p>
               <p className="text-sm text-gray-500">Travellers: 1</p>
             </div>
-            <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white">
+            <button className="px-3 py-1 text-sm rounded bg-green-600 text-white hover:bg-green-700">
               Classify Documents
-            </Button>
-          </CardHeader>
-          <CardContent className="text-sm text-gray-600 space-y-1">
+            </button>
+          </div>
+          <div className="mt-3 text-sm text-gray-600 space-y-1">
             <p><strong>Note from TA:</strong> Questionnaire link</p>
             <p><strong>Remarks:</strong> Add new / View all</p>
             <p><strong>Created By:</strong> Hardik, Jul 10 04:52 PM</p>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
 
-        <Card className="shadow-sm">
-          <CardHeader className="flex justify-between items-start">
+        <div className="bg-white rounded-xl shadow p-4 border">
+          <div className="flex justify-between items-start">
             <div>
               <h3 className="text-lg font-semibold">Tourist Visa</h3>
-              <Badge variant="outline" className="bg-blue-50 text-blue-600 mt-2">Ready to Submit</Badge>
+              <span className="inline-block text-xs px-2 py-1 rounded bg-blue-100 text-blue-600 mt-2">
+                Ready to Submit
+              </span>
             </div>
-            <Button size="sm" variant="outline">Upload Documents</Button>
-          </CardHeader>
-          <CardContent className="text-sm text-gray-600 space-y-1">
+            <button className="px-3 py-1 text-sm rounded border">Upload Documents</button>
+          </div>
+          <div className="mt-3 text-sm text-gray-600 space-y-1">
             <p><strong>Travel Agency:</strong> ORGO.travel</p>
             <p><strong>Estimate:</strong> EST-USA-00633</p>
             <p><strong>Assignee:</strong> Sunder Upreti</p>
             <p className="text-blue-600 cursor-pointer">+ Add-ons</p>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </div>
 
       {/* Tabs */}
-      <Tabs defaultValue="application" className="w-full">
-        <TabsList className="bg-gray-100 rounded-lg p-1">
-          <TabsTrigger value="application">Application</TabsTrigger>
-          <TabsTrigger value="documents">Documents</TabsTrigger>
-          <TabsTrigger value="comms">Comms</TabsTrigger>
-        </TabsList>
+      <div>
+        <div className="flex gap-2 bg-gray-100 rounded-lg p-1 w-fit">
+          <button className="px-4 py-2 rounded bg-white shadow-sm text-sm font-medium">Application</button>
+          <button className="px-4 py-2 rounded text-sm font-medium text-gray-600 hover:bg-white">Documents</button>
+          <button className="px-4 py-2 rounded text-sm font-medium text-gray-600 hover:bg-white">Comms</button>
+        </div>
 
-        <TabsContent value="application" className="mt-4">
-          <Card>
-            <CardContent>
-              <table className="w-full text-sm">
-                <thead className="border-b bg-gray-50 text-left">
-                  <tr>
-                    <th className="p-2"><Checkbox ref={headerCheckboxRef} checked={allVisibleSelected} onCheckedChange={(val) => toggleSelectAllVisible(!!val)} /></th>
-                    <th className="p-2">Traveller</th>
-                    <th className="p-2">Application Status</th>
-                    <th className="p-2">Visa Fee Category</th>
-                    <th className="p-2">Jurisdiction</th>
-                    <th className="p-2">Embassy Ref ID</th>
-                    <th className="p-2">Appointment</th>
+        {/* Application Tab Content */}
+        <div className="mt-4 bg-white rounded-xl shadow border">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 border-b text-left">
+                <tr>
+                  <th className="p-2">
+                    <input
+                      type="checkbox"
+                      ref={headerCheckboxRef}
+                      checked={allVisibleSelected}
+                      onChange={(e) => toggleSelectAllVisible(e.target.checked)}
+                    />
+                  </th>
+                  <th className="p-2">Traveller</th>
+                  <th className="p-2">Application Status</th>
+                  <th className="p-2">Visa Fee Category</th>
+                  <th className="p-2">Jurisdiction</th>
+                  <th className="p-2">Embassy Ref ID</th>
+                  <th className="p-2">Appointment</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pageRows.map((r: any) => (
+                  <tr key={r._id} className="border-b hover:bg-gray-50">
+                    <td className="p-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(String(r._id))}
+                        onChange={(e) => toggleRow(String(r._id), e.target.checked)}
+                      />
+                    </td>
+                    <td className="p-2 font-medium">{r.passport_number}</td>
+                    <td className="p-2">
+                      <span className="px-2 py-1 text-xs rounded bg-yellow-100 text-yellow-700">
+                        {r.status || '—'}
+                      </span>
+                    </td>
+                    <td className="p-2 text-blue-600 cursor-pointer">+ Add</td>
+                    <td className="p-2">{r.jurisdiction || '---'}</td>
+                    <td className="p-2">
+                      <button className="px-2 py-1 text-xs border rounded">Add Embassy Ref ID</button>
+                    </td>
+                    <td className="p-2">{fmtDateTime(r.appointment_date) || 'Select Date'}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {pageRows.map((r: any) => (
-                    <tr key={r._id} className="border-b hover:bg-gray-50">
-                      <td className="p-2"><Checkbox checked={selectedIds.has(String(r._id))} onCheckedChange={(val) => toggleRow(String(r._id), !!val)} /></td>
-                      <td className="p-2 font-medium">{r.passport_number}</td>
-                      <td className="p-2"><Badge variant="secondary" className="bg-yellow-100 text-yellow-700">{r.status || "—"}</Badge></td>
-                      <td className="p-2 text-blue-600 cursor-pointer">+ Add</td>
-                      <td className="p-2">{r.jurisdiction || "---"}</td>
-                      <td className="p-2"><Button size="sm" variant="outline">Add Embassy Ref ID</Button></td>
-                      <td className="p-2">{fmtDateTime(r.appointment_date) || "Select Date"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="documents" className="mt-4">
-          <Card><CardContent>No documents uploaded yet.</CardContent></Card>
-        </TabsContent>
-        <TabsContent value="comms" className="mt-4">
-          <Card><CardContent>Communication log here.</CardContent></Card>
-        </TabsContent>
-      </Tabs>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </Shell>
   );
 }
